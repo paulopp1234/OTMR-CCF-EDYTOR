@@ -8,12 +8,13 @@
     <Version>0.2.0</Version>
     <AssemblyVersion>0.2.0.0</AssemblyVersion>
     <FileVersion>0.2.0.0</FileVersion>
-    <InformationalVersion>v0.2</InformationalVersion>
+    <InformationalVersion>v0.2-test-m1</InformationalVersion>
     <Product>OTMR CCF Editor / Creator</Product>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\CcfEditor.Core\CcfEditor.Core.csproj" />
+    <ProjectReference Include="..\CcfEditor.Otmr\CcfEditor.Otmr.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -23,11 +24,20 @@
     <Compile Update="MainForm.Designer.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
+    <Compile Update="OtmrLiveControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Update="OtmrLiveControl.Designer.cs">
+      <DependentUpon>OtmrLiveControl.cs</DependentUpon>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Update="MainForm.resx">
       <DependentUpon>MainForm.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Update="OtmrLiveControl.resx">
+      <DependentUpon>OtmrLiveControl.cs</DependentUpon>
     </EmbeddedResource>
   </ItemGroup>
 
