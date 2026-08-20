@@ -18,6 +18,7 @@ public sealed class SerialOtmrTransport : IOtmrTransport
     }
 
     public event EventHandler<OtmrBytesReceivedEventArgs>? BytesReceived;
+    public event EventHandler<OtmrBytesTransmittedEventArgs>? BytesTransmitted;
     public event EventHandler<OtmrTransportErrorEventArgs>? ErrorOccurred;
 
     public static string[] GetAvailablePorts() =>
@@ -101,8 +102,10 @@ public sealed class SerialOtmrTransport : IOtmrTransport
                 : throw new InvalidOperationException("OTMR serial port is not connected.");
         }
 
-        await port.BaseStream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+        byte[] exactTx = data.ToArray();
+        await port.BaseStream.WriteAsync(exactTx, cancellationToken).ConfigureAwait(false);
         await port.BaseStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        BytesTransmitted?.Invoke(this, new OtmrBytesTransmittedEventArgs(exactTx));
     }
 
     private void SerialPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
