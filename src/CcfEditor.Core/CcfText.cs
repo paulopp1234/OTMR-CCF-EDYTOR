@@ -31,6 +31,6 @@ internal static class CcfText
 
         Span<byte> field = buffer.AsSpan(offset, length);
         field.Clear();
-        encoded.CopyTo(field);
+        encoded.AsSpan().CopyTo(field);
     }
 }
