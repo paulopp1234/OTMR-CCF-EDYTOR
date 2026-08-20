@@ -38,6 +38,20 @@ public sealed class OtmrMilestone1Tests
     }
 
     [Fact]
+    public void TransportTxEvent_IsCapturedByteForByte()
+    {
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(transport);
+
+        transport.EmitTx(new byte[] { 0xFC, 0xAB, 0x01 });
+
+        OtmrCaptureEntry entry = Assert.Single(service.GetCaptureSnapshot());
+        Assert.Equal(OtmrDirection.Tx, entry.Direction);
+        Assert.Equal(new byte[] { 0xFC, 0xAB, 0x01 }, entry.GetDataSnapshot());
+        Assert.Null(entry.Interpretation);
+    }
+
+    [Fact]
     public async Task CaptureWriter_PreservesTimestampDirectionAndRawHex()
     {
         string temp = Path.Combine(Path.GetTempPath(), $"otmr_{Guid.NewGuid():N}.jsonl");
@@ -66,6 +80,7 @@ public sealed class OtmrMilestone1Tests
     {
         public bool IsConnected { get; private set; }
         public event EventHandler<OtmrBytesReceivedEventArgs>? BytesReceived;
+        public event EventHandler<OtmrBytesTransmittedEventArgs>? BytesTransmitted;
         public event EventHandler<OtmrTransportErrorEventArgs>? ErrorOccurred;
 
         public Task ConnectAsync(OtmrSerialSettings settings, CancellationToken cancellationToken = default)
@@ -85,6 +100,9 @@ public sealed class OtmrMilestone1Tests
 
         public void EmitRx(byte[] bytes) =>
             BytesReceived?.Invoke(this, new OtmrBytesReceivedEventArgs(bytes));
+
+        public void EmitTx(byte[] bytes) =>
+            BytesTransmitted?.Invoke(this, new OtmrBytesTransmittedEventArgs(bytes));
 
         public void Dispose()
         {
