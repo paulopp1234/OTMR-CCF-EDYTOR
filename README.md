@@ -1,6 +1,62 @@
 # OTMR CCF Editor / Creator — .NET 8 WinForms
 
-Current application revision: **v0.2**.
+Current released application revision: **v0.2**.
+
+## `test` branch — OTMR Live Milestone 1
+
+The `test` branch adds the first OTMR serial module without changing the existing CCF editor design or file-handling rules.
+
+Milestone 1 contains only:
+
+- a new Designer-managed **OTMR Live - M1** tab
+- COM-port enumeration
+- proven Class 171 bench serial settings: **38400 baud, 8 data bits, no parity, 1 stop bit**
+- Connect / Disconnect
+- exact timestamped RX capture
+- exact timestamped TX capture at the transport boundary for future safe commands
+- Clear Capture
+- Save Capture as JSON Lines with raw hex retained
+- no protocol decoder or framing assumptions
+
+Milestone 1 deliberately does **not** expose or automatically transmit:
+
+- startup/session commands
+- identity requests
+- start-live or stop-live commands
+- manual raw TX
+- capture replay
+- Program OTMR
+- write configuration
+- erase / firmware / unidentified commands
+
+Connecting a COM port does not send an OTMR protocol command. It only opens the proven 38400/8N1 serial connection and records bytes received from the recorder.
+
+New isolated project/module:
+
+```text
+src/CcfEditor.Otmr/
+  Transport/
+    IOtmrTransport.cs
+    OtmrSerialSettings.cs
+    SerialOtmrTransport.cs
+  Capture/
+    OtmrDirection.cs
+    OtmrCaptureEntry.cs
+    OtmrCaptureWriter.cs
+  Live/
+    OtmrLiveService.cs
+```
+
+WinForms integration:
+
+```text
+src/CcfEditor.WinForms/
+  OtmrLiveControl.cs
+  OtmrLiveControl.Designer.cs
+  OtmrLiveControl.resx
+```
+
+The OTMR UI is a normal Visual Studio Designer `UserControl`; it is not built dynamically at runtime.
 
 ## Revision history
 
