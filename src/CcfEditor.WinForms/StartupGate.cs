@@ -36,7 +36,7 @@ internal static class StartupGate
                 MaxAge = TimeSpan.Zero
             };
             request.Headers.Pragma.ParseAdd("no-cache");
-            request.Headers.UserAgent.ParseAdd("OTMR-CcfEditor/1.0");
+            request.Headers.UserAgent.ParseAdd("OTMR-CcfEditor/0.2");
 
             using HttpResponseMessage response = client
                 .SendAsync(request, HttpCompletionOption.ResponseContentRead)
