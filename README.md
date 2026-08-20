@@ -15,8 +15,14 @@ Milestone 1 contains only:
 - exact timestamped RX capture
 - exact timestamped TX capture at the transport boundary for future safe commands
 - Clear Capture
-- Save Capture as JSON Lines with raw hex retained
+- **Copy Hex** for the selected captured frame/chunk
+- display-only **Show: All / RX / TX** filtering
+- visible **Shown / Total** capture counts
+- Save Capture as **JSON Lines (`.jsonl`)** with raw hex retained
+- Save Capture as a simple human-readable **text (`.txt`)** log
 - no protocol decoder or framing assumptions
+
+The RX/TX display filter never removes data from the underlying capture. **Save Capture always exports the complete raw session**, including both TX and RX entries, regardless of the current on-screen filter.
 
 Milestone 1 deliberately does **not** expose or automatically transmit:
 
