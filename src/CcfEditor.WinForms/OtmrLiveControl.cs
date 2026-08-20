@@ -22,6 +22,7 @@ public partial class OtmrLiveControl : UserControl
 
         RefreshPorts();
         UpdateConnectionUi(false, null);
+        RefreshCaptureGrid();
     }
 
     private void RefreshPortsButton_Click(object? sender, EventArgs e) => RefreshPorts();
@@ -103,8 +104,8 @@ public partial class OtmrLiveControl : UserControl
     private void ClearCaptureButton_Click(object? sender, EventArgs e)
     {
         _liveService.ClearCapture();
-        captureGrid.Rows.Clear();
-        captureCountLabel.Text = "Capture entries: 0";
+        RefreshCaptureGrid();
+        statusLabel.Text = "Capture cleared.";
     }
 
     private async void SaveCaptureButton_Click(object? sender, EventArgs e)
@@ -118,7 +119,8 @@ public partial class OtmrLiveControl : UserControl
 
         using var dialog = new SaveFileDialog
         {
-            Filter = "OTMR capture JSON Lines (*.jsonl)|*.jsonl|All files (*.*)|*.*",
+            Filter = "OTMR capture JSON Lines (*.jsonl)|*.jsonl|OTMR capture text (*.txt)|*.txt",
+            FilterIndex = 1,
             DefaultExt = "jsonl",
             AddExtension = true,
             FileName = $"OTMR_CAPTURE_{DateTime.Now:yyyyMMdd_HHmmss}.jsonl",
@@ -130,14 +132,52 @@ public partial class OtmrLiveControl : UserControl
 
         try
         {
-            await OtmrCaptureWriter.WriteJsonLinesAsync(dialog.FileName, snapshot);
-            statusLabel.Text = $"Saved {snapshot.Count} raw capture entries.";
+            if (dialog.FilterIndex == 2)
+            {
+                string outputPath = Path.ChangeExtension(dialog.FileName, ".txt");
+                await OtmrCaptureWriter.WriteTextAsync(outputPath, snapshot);
+                statusLabel.Text = $"Saved all {snapshot.Count} raw capture entries as text.";
+            }
+            else
+            {
+                string outputPath = Path.ChangeExtension(dialog.FileName, ".jsonl");
+                await OtmrCaptureWriter.WriteJsonLinesAsync(outputPath, snapshot);
+                statusLabel.Text = $"Saved all {snapshot.Count} raw capture entries as JSON Lines.";
+            }
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Unable to save OTMR capture", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
+
+    private void CopyHexButton_Click(object? sender, EventArgs e)
+    {
+        if (captureGrid.CurrentRow is null)
+        {
+            MessageBox.Show(this, "Select a capture row first.", "Copy Hex", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        string hex = Convert.ToString(captureGrid.CurrentRow.Cells[bytesColumn.Index].Value) ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(hex))
+        {
+            MessageBox.Show(this, "The selected capture row has no raw bytes.", "Copy Hex", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(hex);
+            statusLabel.Text = $"Copied {hex.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} raw byte(s) as hex.";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Unable to copy hex", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void CaptureFilterComboBox_SelectedIndexChanged(object? sender, EventArgs e) => RefreshCaptureGrid();
 
     private void LiveService_CaptureAdded(object? sender, OtmrCaptureEntryEventArgs e)
     {
@@ -146,16 +186,14 @@ public partial class OtmrLiveControl : UserControl
 
         void AddRow()
         {
-            OtmrCaptureEntry entry = e.Entry;
-            captureGrid.Rows.Add(
-                entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"),
-                entry.Direction.ToString().ToUpperInvariant(),
-                entry.Hex,
-                entry.Interpretation ?? string.Empty);
+            if (EntryMatchesCurrentFilter(e.Entry))
+            {
+                AddCaptureRow(e.Entry);
+                if (captureGrid.Rows.Count > 0)
+                    captureGrid.FirstDisplayedScrollingRowIndex = captureGrid.Rows.Count - 1;
+            }
 
-            captureCountLabel.Text = $"Capture entries: {captureGrid.Rows.Count}";
-            if (captureGrid.Rows.Count > 0)
-                captureGrid.FirstDisplayedScrollingRowIndex = captureGrid.Rows.Count - 1;
+            UpdateCaptureCount(_liveService.GetCaptureSnapshot().Count);
         }
 
         if (InvokeRequired)
@@ -187,6 +225,58 @@ public partial class OtmrLiveControl : UserControl
         else
             Update();
     }
+
+    private void RefreshCaptureGrid()
+    {
+        if (_closing || IsDisposed)
+            return;
+
+        IReadOnlyList<OtmrCaptureEntry> snapshot = _liveService.GetCaptureSnapshot();
+
+        captureGrid.SuspendLayout();
+        try
+        {
+            captureGrid.Rows.Clear();
+            foreach (OtmrCaptureEntry entry in snapshot)
+            {
+                if (EntryMatchesCurrentFilter(entry))
+                    AddCaptureRow(entry);
+            }
+        }
+        finally
+        {
+            captureGrid.ResumeLayout();
+        }
+
+        UpdateCaptureCount(snapshot.Count);
+
+        if (captureGrid.Rows.Count > 0)
+            captureGrid.FirstDisplayedScrollingRowIndex = captureGrid.Rows.Count - 1;
+    }
+
+    private void AddCaptureRow(OtmrCaptureEntry entry)
+    {
+        int index = captureGrid.Rows.Add(
+            entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"),
+            entry.Direction.ToString().ToUpperInvariant(),
+            entry.Hex,
+            entry.Interpretation ?? string.Empty);
+        captureGrid.Rows[index].Tag = entry;
+    }
+
+    private bool EntryMatchesCurrentFilter(OtmrCaptureEntry entry)
+    {
+        string filter = captureFilterComboBox.SelectedItem as string ?? "All";
+        return filter switch
+        {
+            "RX" => entry.Direction == OtmrDirection.Rx,
+            "TX" => entry.Direction == OtmrDirection.Tx,
+            _ => true
+        };
+    }
+
+    private void UpdateCaptureCount(int total) =>
+        captureCountLabel.Text = $"Shown: {captureGrid.Rows.Count} / Total: {total}";
 
     private void UpdateConnectionUi(bool connected, string? portName)
     {
