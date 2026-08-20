@@ -25,6 +25,7 @@ partial class MainForm
     private TabPage hexTab = null!;
     private TabPage validationTab = null!;
     private SplitContainer recordsSplit = null!;
+    private TableLayoutPanel recordsTopTable = null!;
     private DataGridView recordsGrid = null!;
     private DataGridViewTextBoxColumn recordColumn = null!;
     private DataGridViewTextBoxColumn eventColumn = null!;
@@ -40,6 +41,8 @@ partial class MainForm
     private DataGridViewTextBoxColumn offColumn = null!;
     private DataGridViewTextBoxColumn onColumn = null!;
     private DataGridViewTextBoxColumn rawOffsetColumn = null!;
+    private GroupBox fieldHelpGroupBox = null!;
+    private TextBox fieldHelpTextBox = null!;
     private TableLayoutPanel detailsTable = null!;
     private Label recordLabel = null!;
     private Label typeLabel = null!;
@@ -103,6 +106,7 @@ partial class MainForm
         tabs = new TabControl();
         recordsTab = new TabPage();
         recordsSplit = new SplitContainer();
+        recordsTopTable = new TableLayoutPanel();
         recordsGrid = new DataGridView();
         recordColumn = new DataGridViewTextBoxColumn();
         eventColumn = new DataGridViewTextBoxColumn();
@@ -118,6 +122,8 @@ partial class MainForm
         offColumn = new DataGridViewTextBoxColumn();
         onColumn = new DataGridViewTextBoxColumn();
         rawOffsetColumn = new DataGridViewTextBoxColumn();
+        fieldHelpGroupBox = new GroupBox();
+        fieldHelpTextBox = new TextBox();
         detailsTable = new TableLayoutPanel();
         recordLabel = new Label();
         typeLabel = new Label();
@@ -164,7 +170,9 @@ partial class MainForm
         recordsSplit.Panel1.SuspendLayout();
         recordsSplit.Panel2.SuspendLayout();
         recordsSplit.SuspendLayout();
+        recordsTopTable.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)recordsGrid).BeginInit();
+        fieldHelpGroupBox.SuspendLayout();
         detailsTable.SuspendLayout();
         headerTab.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)headerGrid).BeginInit();
@@ -172,106 +180,74 @@ partial class MainForm
         ((System.ComponentModel.ISupportInitialize)hexGrid).BeginInit();
         validationTab.SuspendLayout();
         SuspendLayout();
-        // 
-        // menuStrip
-        // 
+
         menuStrip.Items.AddRange(new ToolStripItem[] { fileMenu });
         menuStrip.Location = new Point(0, 0);
         menuStrip.Name = "menuStrip";
         menuStrip.Size = new Size(1500, 24);
-        // 
-        // fileMenu
-        // 
+
         fileMenu.DropDownItems.AddRange(new ToolStripItem[] { openMenuItem, saveCopyMenuItem, new ToolStripSeparator(), exitMenuItem });
         fileMenu.Name = "fileMenu";
         fileMenu.Text = "&File";
-        // 
-        // openMenuItem
-        // 
+
         openMenuItem.Name = "openMenuItem";
         openMenuItem.ShortcutKeys = Keys.Control | Keys.O;
         openMenuItem.Text = "&Open CCF...";
         openMenuItem.Click += OpenMenuItem_Click;
-        // 
-        // saveCopyMenuItem
-        // 
+
         saveCopyMenuItem.Enabled = false;
         saveCopyMenuItem.Name = "saveCopyMenuItem";
         saveCopyMenuItem.ShortcutKeys = Keys.Control | Keys.Shift | Keys.S;
         saveCopyMenuItem.Text = "Save CCF &As...";
         saveCopyMenuItem.Click += SaveCopyMenuItem_Click;
-        // 
-        // exitMenuItem
-        // 
+
         exitMenuItem.Name = "exitMenuItem";
         exitMenuItem.Text = "E&xit";
         exitMenuItem.Click += ExitMenuItem_Click;
-        // 
-        // toolStrip
-        // 
+
         toolStrip.Items.AddRange(new ToolStripItem[] { openButton, saveCopyButton, new ToolStripSeparator(), searchLabel, searchTextBox, jumpToPairButton });
         toolStrip.Location = new Point(0, 24);
         toolStrip.Name = "toolStrip";
         toolStrip.Size = new Size(1500, 25);
-        // 
-        // openButton
-        // 
+
         openButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
         openButton.Name = "openButton";
         openButton.Text = "Open CCF";
         openButton.Click += OpenMenuItem_Click;
-        // 
-        // saveCopyButton
-        // 
+
         saveCopyButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
         saveCopyButton.Enabled = false;
         saveCopyButton.Name = "saveCopyButton";
         saveCopyButton.Text = "Save CCF As";
         saveCopyButton.Click += SaveCopyMenuItem_Click;
-        // 
-        // searchLabel
-        // 
+
         searchLabel.Name = "searchLabel";
         searchLabel.Text = "Search:";
-        // 
-        // searchTextBox
-        // 
+
         searchTextBox.Name = "searchTextBox";
         searchTextBox.Size = new Size(260, 25);
         searchTextBox.TextChanged += SearchTextBox_TextChanged;
-        // 
-        // jumpToPairButton
-        // 
+
         jumpToPairButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
         jumpToPairButton.Enabled = false;
         jumpToPairButton.Name = "jumpToPairButton";
         jumpToPairButton.Text = "Jump to pair";
         jumpToPairButton.Click += JumpToPairButton_Click;
-        // 
-        // statusStrip
-        // 
+
         statusStrip.Items.AddRange(new ToolStripItem[] { fileStatusLabel, springStatusLabel, shaStatusLabel });
         statusStrip.Location = new Point(0, 878);
         statusStrip.Name = "statusStrip";
         statusStrip.Size = new Size(1500, 22);
-        // 
-        // fileStatusLabel
-        // 
+
         fileStatusLabel.Name = "fileStatusLabel";
-        fileStatusLabel.Text = "No CCF loaded";
-        // 
-        // springStatusLabel
-        // 
+        fileStatusLabel.Text = "No CCF loaded | v0.2";
+
         springStatusLabel.Name = "springStatusLabel";
         springStatusLabel.Spring = true;
-        // 
-        // shaStatusLabel
-        // 
+
         shaStatusLabel.Name = "shaStatusLabel";
         shaStatusLabel.Text = "Working SHA-256: -";
-        // 
-        // tabs
-        // 
+
         tabs.Controls.Add(recordsTab);
         tabs.Controls.Add(headerTab);
         tabs.Controls.Add(hexTab);
@@ -281,28 +257,32 @@ partial class MainForm
         tabs.Name = "tabs";
         tabs.SelectedIndex = 0;
         tabs.Size = new Size(1500, 829);
-        // 
-        // recordsTab
-        // 
+
         recordsTab.Controls.Add(recordsSplit);
         recordsTab.Location = new Point(4, 24);
         recordsTab.Name = "recordsTab";
         recordsTab.Padding = new Padding(3);
         recordsTab.Text = "Records - edit known fields in grid";
         recordsTab.UseVisualStyleBackColor = true;
-        // 
-        // recordsSplit
-        // 
+
         recordsSplit.Dock = DockStyle.Fill;
         recordsSplit.Location = new Point(3, 3);
         recordsSplit.Name = "recordsSplit";
         recordsSplit.Orientation = Orientation.Horizontal;
-        recordsSplit.Panel1.Controls.Add(recordsGrid);
+        recordsSplit.Panel1.Controls.Add(recordsTopTable);
         recordsSplit.Panel2.Controls.Add(detailsTable);
         recordsSplit.SplitterDistance = 520;
-        // 
-        // recordsGrid
-        // 
+
+        recordsTopTable.ColumnCount = 2;
+        recordsTopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        recordsTopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 420F));
+        recordsTopTable.Controls.Add(recordsGrid, 0, 0);
+        recordsTopTable.Controls.Add(fieldHelpGroupBox, 1, 0);
+        recordsTopTable.Dock = DockStyle.Fill;
+        recordsTopTable.Name = "recordsTopTable";
+        recordsTopTable.RowCount = 1;
+        recordsTopTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
         recordsGrid.AllowUserToAddRows = false;
         recordsGrid.AllowUserToDeleteRows = false;
         recordsGrid.AllowUserToOrderColumns = true;
@@ -316,114 +296,102 @@ partial class MainForm
         recordsGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         recordsGrid.CellBeginEdit += RecordsGrid_CellBeginEdit;
         recordsGrid.CellEndEdit += RecordsGrid_CellEndEdit;
+        recordsGrid.CellEnter += RecordsGrid_CellEnter;
         recordsGrid.CellValidating += RecordsGrid_CellValidating;
         recordsGrid.DataError += RecordsGrid_DataError;
         recordsGrid.SelectionChanged += RecordsGrid_SelectionChanged;
-        // 
-        // recordColumn
-        // 
+
         recordColumn.DataPropertyName = "Record";
         recordColumn.HeaderText = "Record";
         recordColumn.Name = "recordColumn";
         recordColumn.ReadOnly = true;
         recordColumn.Width = 65;
-        // 
-        // eventColumn
-        // 
+
         eventColumn.DataPropertyName = "EventIndex";
         eventColumn.HeaderText = "Event";
         eventColumn.Name = "eventColumn";
         eventColumn.ReadOnly = true;
         eventColumn.Width = 65;
-        // 
-        // typeColumn
-        // 
+
         typeColumn.DataPropertyName = "Type";
         typeColumn.HeaderText = "Type*";
         typeColumn.Name = "typeColumn";
         typeColumn.Width = 50;
-        // 
-        // flagColumn
-        // 
+
         flagColumn.DataPropertyName = "Flag";
         flagColumn.HeaderText = "Flag";
         flagColumn.Name = "flagColumn";
         flagColumn.ReadOnly = true;
         flagColumn.Width = 50;
-        // 
-        // nameColumn
-        // 
+
         nameColumn.DataPropertyName = "Name";
         nameColumn.HeaderText = "Name*";
         nameColumn.Name = "nameColumn";
         nameColumn.Width = 180;
-        // 
-        // colourColumn
-        // 
+
         colourColumn.DataPropertyName = "ColourHex";
         colourColumn.HeaderText = "Colour raw*";
         colourColumn.Name = "colourColumn";
         colourColumn.Width = 90;
-        // 
-        // cardColumn
-        // 
+
         cardColumn.DataPropertyName = "Card";
         cardColumn.HeaderText = "Card*";
         cardColumn.Name = "cardColumn";
         cardColumn.Width = 55;
-        // 
-        // channelColumn
-        // 
+
         channelColumn.DataPropertyName = "Channel";
         channelColumn.HeaderText = "Ch*";
         channelColumn.Name = "channelColumn";
         channelColumn.Width = 55;
-        // 
-        // loggerColumn
-        // 
+
         loggerColumn.DataPropertyName = "LoggerMode";
         loggerColumn.HeaderText = "Logger*";
         loggerColumn.Name = "loggerColumn";
         loggerColumn.Width = 60;
-        // 
-        // functionColumn
-        // 
+
         functionColumn.DataPropertyName = "HardwareFunction";
         functionColumn.HeaderText = "Function*";
         functionColumn.Name = "functionColumn";
         functionColumn.Width = 70;
-        // 
-        // pairColumn
-        // 
+
         pairColumn.DataPropertyName = "Pair";
         pairColumn.HeaderText = "Pair*";
         pairColumn.Name = "pairColumn";
         pairColumn.Width = 60;
-        // 
-        // offColumn
-        // 
+
         offColumn.DataPropertyName = "OffText";
         offColumn.HeaderText = "OFF text*";
         offColumn.Name = "offColumn";
         offColumn.Width = 150;
-        // 
-        // onColumn
-        // 
+
         onColumn.DataPropertyName = "OnText";
         onColumn.HeaderText = "ON text*";
         onColumn.Name = "onColumn";
         onColumn.Width = 150;
-        // 
-        // rawOffsetColumn
-        // 
+
         rawOffsetColumn.DataPropertyName = "RawOffset";
         rawOffsetColumn.HeaderText = "Offset";
         rawOffsetColumn.Name = "rawOffsetColumn";
         rawOffsetColumn.ReadOnly = true;
         rawOffsetColumn.Width = 80;
-        // 
-        // detailsTable
-        // 
+
+        fieldHelpGroupBox.Controls.Add(fieldHelpTextBox);
+        fieldHelpGroupBox.Dock = DockStyle.Fill;
+        fieldHelpGroupBox.Margin = new Padding(8, 3, 3, 3);
+        fieldHelpGroupBox.Name = "fieldHelpGroupBox";
+        fieldHelpGroupBox.Padding = new Padding(10);
+        fieldHelpGroupBox.Text = "Field description / schema help";
+
+        fieldHelpTextBox.BackColor = SystemColors.Window;
+        fieldHelpTextBox.BorderStyle = BorderStyle.None;
+        fieldHelpTextBox.Dock = DockStyle.Fill;
+        fieldHelpTextBox.Font = new Font("Segoe UI", 10F);
+        fieldHelpTextBox.Multiline = true;
+        fieldHelpTextBox.Name = "fieldHelpTextBox";
+        fieldHelpTextBox.ReadOnly = true;
+        fieldHelpTextBox.ScrollBars = ScrollBars.Vertical;
+        fieldHelpTextBox.Text = "Click a cell in the Records grid to see what that CCF field means.\r\n\r\nThe current value shown here comes from the CCF you opened. Description text is schema/help information only.";
+
         detailsTable.ColumnCount = 4;
         detailsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125F));
         detailsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
@@ -457,9 +425,7 @@ partial class MainForm
         detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
         detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
         detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
-        // 
-        // detail labels
-        // 
+
         recordLabel.Dock = DockStyle.Fill;
         recordLabel.Text = "Record / event";
         recordLabel.TextAlign = ContentAlignment.MiddleLeft;
@@ -490,9 +456,7 @@ partial class MainForm
         rawLabel.Dock = DockStyle.Fill;
         rawLabel.Text = "Raw record bytes";
         rawLabel.TextAlign = ContentAlignment.MiddleLeft;
-        // 
-        // detail text boxes
-        // 
+
         detailRecordTextBox.Dock = DockStyle.Fill;
         detailRecordTextBox.ReadOnly = true;
         detailTypeTextBox.Dock = DockStyle.Fill;
@@ -515,18 +479,14 @@ partial class MainForm
         detailRawTextBox.Font = new Font("Consolas", 9F);
         detailRawTextBox.ReadOnly = true;
         detailRawTextBox.WordWrap = false;
-        // 
-        // headerTab
-        // 
+
         headerTab.Controls.Add(headerGrid);
         headerTab.Location = new Point(4, 24);
         headerTab.Name = "headerTab";
         headerTab.Padding = new Padding(3);
         headerTab.Text = "Header - edit supported Decoded cells";
         headerTab.UseVisualStyleBackColor = true;
-        // 
-        // headerGrid
-        // 
+
         headerGrid.AllowUserToAddRows = false;
         headerGrid.AllowUserToDeleteRows = false;
         headerGrid.AutoGenerateColumns = false;
@@ -540,57 +500,43 @@ partial class MainForm
         headerGrid.CellEndEdit += HeaderGrid_CellEndEdit;
         headerGrid.CellValidating += HeaderGrid_CellValidating;
         headerGrid.DataError += HeaderGrid_DataError;
-        // 
-        // headerOffsetColumn
-        // 
+
         headerOffsetColumn.DataPropertyName = "Offset";
         headerOffsetColumn.HeaderText = "Offset";
         headerOffsetColumn.Name = "headerOffsetColumn";
         headerOffsetColumn.ReadOnly = true;
         headerOffsetColumn.Width = 90;
-        // 
-        // headerMeaningColumn
-        // 
+
         headerMeaningColumn.DataPropertyName = "Meaning";
         headerMeaningColumn.HeaderText = "Meaning";
         headerMeaningColumn.Name = "headerMeaningColumn";
         headerMeaningColumn.ReadOnly = true;
         headerMeaningColumn.Width = 260;
-        // 
-        // headerRawHexColumn
-        // 
+
         headerRawHexColumn.DataPropertyName = "RawHex";
         headerRawHexColumn.HeaderText = "Raw bytes";
         headerRawHexColumn.Name = "headerRawHexColumn";
         headerRawHexColumn.ReadOnly = true;
         headerRawHexColumn.Width = 280;
-        // 
-        // headerDecodedColumn
-        // 
+
         headerDecodedColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
         headerDecodedColumn.DataPropertyName = "Decoded";
         headerDecodedColumn.HeaderText = "Decoded / edit value*";
         headerDecodedColumn.Name = "headerDecodedColumn";
-        // 
-        // headerEditableColumn
-        // 
+
         headerEditableColumn.DataPropertyName = "Editable";
         headerEditableColumn.HeaderText = "Editable";
         headerEditableColumn.Name = "headerEditableColumn";
         headerEditableColumn.ReadOnly = true;
         headerEditableColumn.Width = 65;
-        // 
-        // hexTab
-        // 
+
         hexTab.Controls.Add(hexGrid);
         hexTab.Location = new Point(4, 24);
         hexTab.Name = "hexTab";
         hexTab.Padding = new Padding(3);
         hexTab.Text = "Hex";
         hexTab.UseVisualStyleBackColor = true;
-        // 
-        // hexGrid
-        // 
+
         hexGrid.AllowUserToAddRows = false;
         hexGrid.AllowUserToDeleteRows = false;
         hexGrid.AutoGenerateColumns = false;
@@ -602,61 +548,45 @@ partial class MainForm
         hexGrid.ReadOnly = true;
         hexGrid.RowHeadersVisible = false;
         hexGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        // 
-        // hexOffsetColumn
-        // 
+
         hexOffsetColumn.DataPropertyName = "Offset";
         hexOffsetColumn.HeaderText = "Offset";
         hexOffsetColumn.Name = "hexOffsetColumn";
         hexOffsetColumn.ReadOnly = true;
         hexOffsetColumn.Width = 90;
-        // 
-        // hexBytesColumn
-        // 
+
         hexBytesColumn.DataPropertyName = "Hex";
         hexBytesColumn.HeaderText = "Hex bytes";
         hexBytesColumn.Name = "hexBytesColumn";
         hexBytesColumn.ReadOnly = true;
         hexBytesColumn.Width = 630;
-        // 
-        // hexAsciiColumn
-        // 
+
         hexAsciiColumn.DataPropertyName = "Ascii";
         hexAsciiColumn.HeaderText = "ASCII";
         hexAsciiColumn.Name = "hexAsciiColumn";
         hexAsciiColumn.ReadOnly = true;
         hexAsciiColumn.Width = 220;
-        // 
-        // validationTab
-        // 
+
         validationTab.Controls.Add(validationList);
         validationTab.Location = new Point(4, 24);
         validationTab.Name = "validationTab";
         validationTab.Padding = new Padding(3);
         validationTab.Text = "Validation";
         validationTab.UseVisualStyleBackColor = true;
-        // 
-        // validationList
-        // 
+
         validationList.Columns.AddRange(new ColumnHeader[] { validationSeverityColumn, validationMessageColumn });
         validationList.Dock = DockStyle.Fill;
         validationList.FullRowSelect = true;
         validationList.GridLines = true;
         validationList.Name = "validationList";
         validationList.View = View.Details;
-        // 
-        // validationSeverityColumn
-        // 
+
         validationSeverityColumn.Text = "Severity";
         validationSeverityColumn.Width = 100;
-        // 
-        // validationMessageColumn
-        // 
+
         validationMessageColumn.Text = "Message";
         validationMessageColumn.Width = 1200;
-        // 
-        // MainForm
-        // 
+
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         ClientSize = new Size(1500, 900);
@@ -668,7 +598,7 @@ partial class MainForm
         MinimumSize = new Size(1100, 700);
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "OTMR CCF Editor / Creator";
+        Text = "OTMR CCF Editor / Creator v0.2";
         FormClosing += MainForm_FormClosing;
         menuStrip.ResumeLayout(false);
         menuStrip.PerformLayout();
@@ -682,7 +612,10 @@ partial class MainForm
         recordsSplit.Panel2.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)recordsSplit).EndInit();
         recordsSplit.ResumeLayout(false);
+        recordsTopTable.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)recordsGrid).EndInit();
+        fieldHelpGroupBox.ResumeLayout(false);
+        fieldHelpGroupBox.PerformLayout();
         detailsTable.ResumeLayout(false);
         detailsTable.PerformLayout();
         headerTab.ResumeLayout(false);
