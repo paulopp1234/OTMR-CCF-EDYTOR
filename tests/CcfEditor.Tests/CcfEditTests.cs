@@ -35,7 +35,8 @@ public sealed class CcfEditTests
 
         CcfEditService.SetDigitalPairRecord(document, 125, 200);
 
-        Assert.Equal((ushort)200, document.Records[125].PairRecord);
+        Assert.True(document.Records[125].PairRecord.HasValue);
+        Assert.Equal((ushort)200, document.Records[125].PairRecord!.Value);
         Assert.NotEmpty(document.GetByteChanges());
         Assert.All(document.GetByteChanges(), change => Assert.InRange(change.Offset, fieldStart, fieldEnd));
 
