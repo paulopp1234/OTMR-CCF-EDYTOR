@@ -24,6 +24,8 @@ partial class MainForm
     private TabPage headerTab = null!;
     private TabPage hexTab = null!;
     private TabPage validationTab = null!;
+    private TabPage otmrLiveTab = null!;
+    private OtmrLiveControl otmrLiveControl = null!;
     private SplitContainer recordsSplit = null!;
     private TableLayoutPanel recordsTopTable = null!;
     private DataGridView recordsGrid = null!;
@@ -161,6 +163,9 @@ partial class MainForm
         validationList = new ListView();
         validationSeverityColumn = new ColumnHeader();
         validationMessageColumn = new ColumnHeader();
+        otmrLiveTab = new TabPage();
+        otmrLiveControl = new OtmrLiveControl();
+
         menuStrip.SuspendLayout();
         toolStrip.SuspendLayout();
         statusStrip.SuspendLayout();
@@ -179,6 +184,7 @@ partial class MainForm
         hexTab.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)hexGrid).BeginInit();
         validationTab.SuspendLayout();
+        otmrLiveTab.SuspendLayout();
         SuspendLayout();
 
         menuStrip.Items.AddRange(new ToolStripItem[] { fileMenu });
@@ -223,7 +229,6 @@ partial class MainForm
 
         searchLabel.Name = "searchLabel";
         searchLabel.Text = "Search:";
-
         searchTextBox.Name = "searchTextBox";
         searchTextBox.Size = new Size(260, 25);
         searchTextBox.TextChanged += SearchTextBox_TextChanged;
@@ -238,13 +243,10 @@ partial class MainForm
         statusStrip.Location = new Point(0, 878);
         statusStrip.Name = "statusStrip";
         statusStrip.Size = new Size(1500, 22);
-
         fileStatusLabel.Name = "fileStatusLabel";
-        fileStatusLabel.Text = "No CCF loaded | v0.2";
-
+        fileStatusLabel.Text = "No CCF loaded | v0.2 test / OTMR M1";
         springStatusLabel.Name = "springStatusLabel";
         springStatusLabel.Spring = true;
-
         shaStatusLabel.Name = "shaStatusLabel";
         shaStatusLabel.Text = "Working SHA-256: -";
 
@@ -252,6 +254,7 @@ partial class MainForm
         tabs.Controls.Add(headerTab);
         tabs.Controls.Add(hexTab);
         tabs.Controls.Add(validationTab);
+        tabs.Controls.Add(otmrLiveTab);
         tabs.Dock = DockStyle.Fill;
         tabs.Location = new Point(0, 49);
         tabs.Name = "tabs";
@@ -301,79 +304,20 @@ partial class MainForm
         recordsGrid.DataError += RecordsGrid_DataError;
         recordsGrid.SelectionChanged += RecordsGrid_SelectionChanged;
 
-        recordColumn.DataPropertyName = "Record";
-        recordColumn.HeaderText = "Record";
-        recordColumn.Name = "recordColumn";
-        recordColumn.ReadOnly = true;
-        recordColumn.Width = 65;
-
-        eventColumn.DataPropertyName = "EventIndex";
-        eventColumn.HeaderText = "Event";
-        eventColumn.Name = "eventColumn";
-        eventColumn.ReadOnly = true;
-        eventColumn.Width = 65;
-
-        typeColumn.DataPropertyName = "Type";
-        typeColumn.HeaderText = "Type*";
-        typeColumn.Name = "typeColumn";
-        typeColumn.Width = 50;
-
-        flagColumn.DataPropertyName = "Flag";
-        flagColumn.HeaderText = "Flag";
-        flagColumn.Name = "flagColumn";
-        flagColumn.ReadOnly = true;
-        flagColumn.Width = 50;
-
-        nameColumn.DataPropertyName = "Name";
-        nameColumn.HeaderText = "Name*";
-        nameColumn.Name = "nameColumn";
-        nameColumn.Width = 180;
-
-        colourColumn.DataPropertyName = "ColourHex";
-        colourColumn.HeaderText = "Colour raw*";
-        colourColumn.Name = "colourColumn";
-        colourColumn.Width = 90;
-
-        cardColumn.DataPropertyName = "Card";
-        cardColumn.HeaderText = "Card*";
-        cardColumn.Name = "cardColumn";
-        cardColumn.Width = 55;
-
-        channelColumn.DataPropertyName = "Channel";
-        channelColumn.HeaderText = "Ch*";
-        channelColumn.Name = "channelColumn";
-        channelColumn.Width = 55;
-
-        loggerColumn.DataPropertyName = "LoggerMode";
-        loggerColumn.HeaderText = "Logger*";
-        loggerColumn.Name = "loggerColumn";
-        loggerColumn.Width = 60;
-
-        functionColumn.DataPropertyName = "HardwareFunction";
-        functionColumn.HeaderText = "Function*";
-        functionColumn.Name = "functionColumn";
-        functionColumn.Width = 70;
-
-        pairColumn.DataPropertyName = "Pair";
-        pairColumn.HeaderText = "Pair*";
-        pairColumn.Name = "pairColumn";
-        pairColumn.Width = 60;
-
-        offColumn.DataPropertyName = "OffText";
-        offColumn.HeaderText = "OFF text*";
-        offColumn.Name = "offColumn";
-        offColumn.Width = 150;
-
-        onColumn.DataPropertyName = "OnText";
-        onColumn.HeaderText = "ON text*";
-        onColumn.Name = "onColumn";
-        onColumn.Width = 150;
-
-        rawOffsetColumn.DataPropertyName = "RawOffset";
-        rawOffsetColumn.HeaderText = "Offset";
-        rawOffsetColumn.Name = "rawOffsetColumn";
-        rawOffsetColumn.ReadOnly = true;
-        rawOffsetColumn.Width = 80;
+        recordColumn.DataPropertyName = "Record"; recordColumn.HeaderText = "Record"; recordColumn.Name = "recordColumn"; recordColumn.ReadOnly = true; recordColumn.Width = 65;
+        eventColumn.DataPropertyName = "EventIndex"; eventColumn.HeaderText = "Event"; eventColumn.Name = "eventColumn"; eventColumn.ReadOnly = true; eventColumn.Width = 65;
+        typeColumn.DataPropertyName = "Type"; typeColumn.HeaderText = "Type*"; typeColumn.Name = "typeColumn"; typeColumn.Width = 50;
+        flagColumn.DataPropertyName = "Flag"; flagColumn.HeaderText = "Flag"; flagColumn.Name = "flagColumn"; flagColumn.ReadOnly = true; flagColumn.Width = 50;
+        nameColumn.DataPropertyName = "Name"; nameColumn.HeaderText = "Name*"; nameColumn.Name = "nameColumn"; nameColumn.Width = 180;
+        colourColumn.DataPropertyName = "ColourHex"; colourColumn.HeaderText = "Colour raw*"; colourColumn.Name = "colourColumn"; colourColumn.Width = 90;
+        cardColumn.DataPropertyName = "Card"; cardColumn.HeaderText = "Card*"; cardColumn.Name = "cardColumn"; cardColumn.Width = 55;
+        channelColumn.DataPropertyName = "Channel"; channelColumn.HeaderText = "Ch*"; channelColumn.Name = "channelColumn"; channelColumn.Width = 55;
+        loggerColumn.DataPropertyName = "LoggerMode"; loggerColumn.HeaderText = "Logger*"; loggerColumn.Name = "loggerColumn"; loggerColumn.Width = 60;
+        functionColumn.DataPropertyName = "HardwareFunction"; functionColumn.HeaderText = "Function*"; functionColumn.Name = "functionColumn"; functionColumn.Width = 70;
+        pairColumn.DataPropertyName = "Pair"; pairColumn.HeaderText = "Pair*"; pairColumn.Name = "pairColumn"; pairColumn.Width = 60;
+        offColumn.DataPropertyName = "OffText"; offColumn.HeaderText = "OFF text*"; offColumn.Name = "offColumn"; offColumn.Width = 150;
+        onColumn.DataPropertyName = "OnText"; onColumn.HeaderText = "ON text*"; onColumn.Name = "onColumn"; onColumn.Width = 150;
+        rawOffsetColumn.DataPropertyName = "RawOffset"; rawOffsetColumn.HeaderText = "Offset"; rawOffsetColumn.Name = "rawOffsetColumn"; rawOffsetColumn.ReadOnly = true; rawOffsetColumn.Width = 80;
 
         fieldHelpGroupBox.Controls.Add(fieldHelpTextBox);
         fieldHelpGroupBox.Dock = DockStyle.Fill;
@@ -381,7 +325,6 @@ partial class MainForm
         fieldHelpGroupBox.Name = "fieldHelpGroupBox";
         fieldHelpGroupBox.Padding = new Padding(10);
         fieldHelpGroupBox.Text = "Field description / schema help";
-
         fieldHelpTextBox.BackColor = SystemColors.Window;
         fieldHelpTextBox.BorderStyle = BorderStyle.None;
         fieldHelpTextBox.Dock = DockStyle.Fill;
@@ -397,26 +340,16 @@ partial class MainForm
         detailsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
         detailsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125F));
         detailsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-        detailsTable.Controls.Add(recordLabel, 0, 0);
-        detailsTable.Controls.Add(detailRecordTextBox, 1, 0);
-        detailsTable.Controls.Add(typeLabel, 2, 0);
-        detailsTable.Controls.Add(detailTypeTextBox, 3, 0);
-        detailsTable.Controls.Add(nameLabel, 0, 1);
-        detailsTable.Controls.Add(detailNameTextBox, 1, 1);
-        detailsTable.Controls.Add(pairLabel, 2, 1);
-        detailsTable.Controls.Add(detailPairTextBox, 3, 1);
-        detailsTable.Controls.Add(cardLabel, 0, 2);
-        detailsTable.Controls.Add(detailCardChannelTextBox, 1, 2);
-        detailsTable.Controls.Add(loggerLabel, 2, 2);
-        detailsTable.Controls.Add(detailLoggerFunctionTextBox, 3, 2);
-        detailsTable.Controls.Add(offLabel, 0, 3);
-        detailsTable.Controls.Add(detailOffTextBox, 1, 3);
-        detailsTable.Controls.Add(onLabel, 2, 3);
-        detailsTable.Controls.Add(detailOnTextBox, 3, 3);
-        detailsTable.Controls.Add(offsetLabel, 0, 4);
-        detailsTable.Controls.Add(detailOffsetTextBox, 1, 4);
-        detailsTable.Controls.Add(rawLabel, 2, 4);
-        detailsTable.Controls.Add(detailRawTextBox, 3, 4);
+        detailsTable.Controls.Add(recordLabel, 0, 0); detailsTable.Controls.Add(detailRecordTextBox, 1, 0);
+        detailsTable.Controls.Add(typeLabel, 2, 0); detailsTable.Controls.Add(detailTypeTextBox, 3, 0);
+        detailsTable.Controls.Add(nameLabel, 0, 1); detailsTable.Controls.Add(detailNameTextBox, 1, 1);
+        detailsTable.Controls.Add(pairLabel, 2, 1); detailsTable.Controls.Add(detailPairTextBox, 3, 1);
+        detailsTable.Controls.Add(cardLabel, 0, 2); detailsTable.Controls.Add(detailCardChannelTextBox, 1, 2);
+        detailsTable.Controls.Add(loggerLabel, 2, 2); detailsTable.Controls.Add(detailLoggerFunctionTextBox, 3, 2);
+        detailsTable.Controls.Add(offLabel, 0, 3); detailsTable.Controls.Add(detailOffTextBox, 1, 3);
+        detailsTable.Controls.Add(onLabel, 2, 3); detailsTable.Controls.Add(detailOnTextBox, 3, 3);
+        detailsTable.Controls.Add(offsetLabel, 0, 4); detailsTable.Controls.Add(detailOffsetTextBox, 1, 4);
+        detailsTable.Controls.Add(rawLabel, 2, 4); detailsTable.Controls.Add(detailRawTextBox, 3, 4);
         detailsTable.Dock = DockStyle.Fill;
         detailsTable.Padding = new Padding(8);
         detailsTable.RowCount = 5;
@@ -426,59 +359,27 @@ partial class MainForm
         detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
         detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
 
-        recordLabel.Dock = DockStyle.Fill;
-        recordLabel.Text = "Record / event";
-        recordLabel.TextAlign = ContentAlignment.MiddleLeft;
-        typeLabel.Dock = DockStyle.Fill;
-        typeLabel.Text = "Type / flag";
-        typeLabel.TextAlign = ContentAlignment.MiddleLeft;
-        nameLabel.Dock = DockStyle.Fill;
-        nameLabel.Text = "Name";
-        nameLabel.TextAlign = ContentAlignment.MiddleLeft;
-        pairLabel.Dock = DockStyle.Fill;
-        pairLabel.Text = "Pair";
-        pairLabel.TextAlign = ContentAlignment.MiddleLeft;
-        cardLabel.Dock = DockStyle.Fill;
-        cardLabel.Text = "Card / channel";
-        cardLabel.TextAlign = ContentAlignment.MiddleLeft;
-        loggerLabel.Dock = DockStyle.Fill;
-        loggerLabel.Text = "Logger / function";
-        loggerLabel.TextAlign = ContentAlignment.MiddleLeft;
-        offLabel.Dock = DockStyle.Fill;
-        offLabel.Text = "OFF text";
-        offLabel.TextAlign = ContentAlignment.MiddleLeft;
-        onLabel.Dock = DockStyle.Fill;
-        onLabel.Text = "ON text";
-        onLabel.TextAlign = ContentAlignment.MiddleLeft;
-        offsetLabel.Dock = DockStyle.Fill;
-        offsetLabel.Text = "Record offset";
-        offsetLabel.TextAlign = ContentAlignment.MiddleLeft;
-        rawLabel.Dock = DockStyle.Fill;
-        rawLabel.Text = "Raw record bytes";
-        rawLabel.TextAlign = ContentAlignment.MiddleLeft;
+        recordLabel.Dock = DockStyle.Fill; recordLabel.Text = "Record / event"; recordLabel.TextAlign = ContentAlignment.MiddleLeft;
+        typeLabel.Dock = DockStyle.Fill; typeLabel.Text = "Type / flag"; typeLabel.TextAlign = ContentAlignment.MiddleLeft;
+        nameLabel.Dock = DockStyle.Fill; nameLabel.Text = "Name"; nameLabel.TextAlign = ContentAlignment.MiddleLeft;
+        pairLabel.Dock = DockStyle.Fill; pairLabel.Text = "Pair"; pairLabel.TextAlign = ContentAlignment.MiddleLeft;
+        cardLabel.Dock = DockStyle.Fill; cardLabel.Text = "Card / channel"; cardLabel.TextAlign = ContentAlignment.MiddleLeft;
+        loggerLabel.Dock = DockStyle.Fill; loggerLabel.Text = "Logger / function"; loggerLabel.TextAlign = ContentAlignment.MiddleLeft;
+        offLabel.Dock = DockStyle.Fill; offLabel.Text = "OFF text"; offLabel.TextAlign = ContentAlignment.MiddleLeft;
+        onLabel.Dock = DockStyle.Fill; onLabel.Text = "ON text"; onLabel.TextAlign = ContentAlignment.MiddleLeft;
+        offsetLabel.Dock = DockStyle.Fill; offsetLabel.Text = "Record offset"; offsetLabel.TextAlign = ContentAlignment.MiddleLeft;
+        rawLabel.Dock = DockStyle.Fill; rawLabel.Text = "Raw record bytes"; rawLabel.TextAlign = ContentAlignment.MiddleLeft;
 
-        detailRecordTextBox.Dock = DockStyle.Fill;
-        detailRecordTextBox.ReadOnly = true;
-        detailTypeTextBox.Dock = DockStyle.Fill;
-        detailTypeTextBox.ReadOnly = true;
-        detailNameTextBox.Dock = DockStyle.Fill;
-        detailNameTextBox.ReadOnly = true;
-        detailPairTextBox.Dock = DockStyle.Fill;
-        detailPairTextBox.ReadOnly = true;
-        detailCardChannelTextBox.Dock = DockStyle.Fill;
-        detailCardChannelTextBox.ReadOnly = true;
-        detailLoggerFunctionTextBox.Dock = DockStyle.Fill;
-        detailLoggerFunctionTextBox.ReadOnly = true;
-        detailOffTextBox.Dock = DockStyle.Fill;
-        detailOffTextBox.ReadOnly = true;
-        detailOnTextBox.Dock = DockStyle.Fill;
-        detailOnTextBox.ReadOnly = true;
-        detailOffsetTextBox.Dock = DockStyle.Fill;
-        detailOffsetTextBox.ReadOnly = true;
-        detailRawTextBox.Dock = DockStyle.Fill;
-        detailRawTextBox.Font = new Font("Consolas", 9F);
-        detailRawTextBox.ReadOnly = true;
-        detailRawTextBox.WordWrap = false;
+        detailRecordTextBox.Dock = DockStyle.Fill; detailRecordTextBox.ReadOnly = true;
+        detailTypeTextBox.Dock = DockStyle.Fill; detailTypeTextBox.ReadOnly = true;
+        detailNameTextBox.Dock = DockStyle.Fill; detailNameTextBox.ReadOnly = true;
+        detailPairTextBox.Dock = DockStyle.Fill; detailPairTextBox.ReadOnly = true;
+        detailCardChannelTextBox.Dock = DockStyle.Fill; detailCardChannelTextBox.ReadOnly = true;
+        detailLoggerFunctionTextBox.Dock = DockStyle.Fill; detailLoggerFunctionTextBox.ReadOnly = true;
+        detailOffTextBox.Dock = DockStyle.Fill; detailOffTextBox.ReadOnly = true;
+        detailOnTextBox.Dock = DockStyle.Fill; detailOnTextBox.ReadOnly = true;
+        detailOffsetTextBox.Dock = DockStyle.Fill; detailOffsetTextBox.ReadOnly = true;
+        detailRawTextBox.Dock = DockStyle.Fill; detailRawTextBox.Font = new Font("Consolas", 9F); detailRawTextBox.ReadOnly = true; detailRawTextBox.WordWrap = false;
 
         headerTab.Controls.Add(headerGrid);
         headerTab.Location = new Point(4, 24);
@@ -486,7 +387,6 @@ partial class MainForm
         headerTab.Padding = new Padding(3);
         headerTab.Text = "Header - edit supported Decoded cells";
         headerTab.UseVisualStyleBackColor = true;
-
         headerGrid.AllowUserToAddRows = false;
         headerGrid.AllowUserToDeleteRows = false;
         headerGrid.AutoGenerateColumns = false;
@@ -500,35 +400,11 @@ partial class MainForm
         headerGrid.CellEndEdit += HeaderGrid_CellEndEdit;
         headerGrid.CellValidating += HeaderGrid_CellValidating;
         headerGrid.DataError += HeaderGrid_DataError;
-
-        headerOffsetColumn.DataPropertyName = "Offset";
-        headerOffsetColumn.HeaderText = "Offset";
-        headerOffsetColumn.Name = "headerOffsetColumn";
-        headerOffsetColumn.ReadOnly = true;
-        headerOffsetColumn.Width = 90;
-
-        headerMeaningColumn.DataPropertyName = "Meaning";
-        headerMeaningColumn.HeaderText = "Meaning";
-        headerMeaningColumn.Name = "headerMeaningColumn";
-        headerMeaningColumn.ReadOnly = true;
-        headerMeaningColumn.Width = 260;
-
-        headerRawHexColumn.DataPropertyName = "RawHex";
-        headerRawHexColumn.HeaderText = "Raw bytes";
-        headerRawHexColumn.Name = "headerRawHexColumn";
-        headerRawHexColumn.ReadOnly = true;
-        headerRawHexColumn.Width = 280;
-
-        headerDecodedColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
-        headerDecodedColumn.DataPropertyName = "Decoded";
-        headerDecodedColumn.HeaderText = "Decoded / edit value*";
-        headerDecodedColumn.Name = "headerDecodedColumn";
-
-        headerEditableColumn.DataPropertyName = "Editable";
-        headerEditableColumn.HeaderText = "Editable";
-        headerEditableColumn.Name = "headerEditableColumn";
-        headerEditableColumn.ReadOnly = true;
-        headerEditableColumn.Width = 65;
+        headerOffsetColumn.DataPropertyName = "Offset"; headerOffsetColumn.HeaderText = "Offset"; headerOffsetColumn.Name = "headerOffsetColumn"; headerOffsetColumn.ReadOnly = true; headerOffsetColumn.Width = 90;
+        headerMeaningColumn.DataPropertyName = "Meaning"; headerMeaningColumn.HeaderText = "Meaning"; headerMeaningColumn.Name = "headerMeaningColumn"; headerMeaningColumn.ReadOnly = true; headerMeaningColumn.Width = 260;
+        headerRawHexColumn.DataPropertyName = "RawHex"; headerRawHexColumn.HeaderText = "Raw bytes"; headerRawHexColumn.Name = "headerRawHexColumn"; headerRawHexColumn.ReadOnly = true; headerRawHexColumn.Width = 280;
+        headerDecodedColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill; headerDecodedColumn.DataPropertyName = "Decoded"; headerDecodedColumn.HeaderText = "Decoded / edit value*"; headerDecodedColumn.Name = "headerDecodedColumn";
+        headerEditableColumn.DataPropertyName = "Editable"; headerEditableColumn.HeaderText = "Editable"; headerEditableColumn.Name = "headerEditableColumn"; headerEditableColumn.ReadOnly = true; headerEditableColumn.Width = 65;
 
         hexTab.Controls.Add(hexGrid);
         hexTab.Location = new Point(4, 24);
@@ -536,7 +412,6 @@ partial class MainForm
         hexTab.Padding = new Padding(3);
         hexTab.Text = "Hex";
         hexTab.UseVisualStyleBackColor = true;
-
         hexGrid.AllowUserToAddRows = false;
         hexGrid.AllowUserToDeleteRows = false;
         hexGrid.AutoGenerateColumns = false;
@@ -548,24 +423,9 @@ partial class MainForm
         hexGrid.ReadOnly = true;
         hexGrid.RowHeadersVisible = false;
         hexGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-
-        hexOffsetColumn.DataPropertyName = "Offset";
-        hexOffsetColumn.HeaderText = "Offset";
-        hexOffsetColumn.Name = "hexOffsetColumn";
-        hexOffsetColumn.ReadOnly = true;
-        hexOffsetColumn.Width = 90;
-
-        hexBytesColumn.DataPropertyName = "Hex";
-        hexBytesColumn.HeaderText = "Hex bytes";
-        hexBytesColumn.Name = "hexBytesColumn";
-        hexBytesColumn.ReadOnly = true;
-        hexBytesColumn.Width = 630;
-
-        hexAsciiColumn.DataPropertyName = "Ascii";
-        hexAsciiColumn.HeaderText = "ASCII";
-        hexAsciiColumn.Name = "hexAsciiColumn";
-        hexAsciiColumn.ReadOnly = true;
-        hexAsciiColumn.Width = 220;
+        hexOffsetColumn.DataPropertyName = "Offset"; hexOffsetColumn.HeaderText = "Offset"; hexOffsetColumn.Name = "hexOffsetColumn"; hexOffsetColumn.ReadOnly = true; hexOffsetColumn.Width = 90;
+        hexBytesColumn.DataPropertyName = "Hex"; hexBytesColumn.HeaderText = "Hex bytes"; hexBytesColumn.Name = "hexBytesColumn"; hexBytesColumn.ReadOnly = true; hexBytesColumn.Width = 630;
+        hexAsciiColumn.DataPropertyName = "Ascii"; hexAsciiColumn.HeaderText = "ASCII"; hexAsciiColumn.Name = "hexAsciiColumn"; hexAsciiColumn.ReadOnly = true; hexAsciiColumn.Width = 220;
 
         validationTab.Controls.Add(validationList);
         validationTab.Location = new Point(4, 24);
@@ -573,19 +433,25 @@ partial class MainForm
         validationTab.Padding = new Padding(3);
         validationTab.Text = "Validation";
         validationTab.UseVisualStyleBackColor = true;
-
         validationList.Columns.AddRange(new ColumnHeader[] { validationSeverityColumn, validationMessageColumn });
         validationList.Dock = DockStyle.Fill;
         validationList.FullRowSelect = true;
         validationList.GridLines = true;
         validationList.Name = "validationList";
         validationList.View = View.Details;
+        validationSeverityColumn.Text = "Severity"; validationSeverityColumn.Width = 100;
+        validationMessageColumn.Text = "Message"; validationMessageColumn.Width = 1200;
 
-        validationSeverityColumn.Text = "Severity";
-        validationSeverityColumn.Width = 100;
-
-        validationMessageColumn.Text = "Message";
-        validationMessageColumn.Width = 1200;
+        otmrLiveTab.Controls.Add(otmrLiveControl);
+        otmrLiveTab.Location = new Point(4, 24);
+        otmrLiveTab.Name = "otmrLiveTab";
+        otmrLiveTab.Padding = new Padding(3);
+        otmrLiveTab.Text = "OTMR Live - M1";
+        otmrLiveTab.UseVisualStyleBackColor = true;
+        otmrLiveControl.Dock = DockStyle.Fill;
+        otmrLiveControl.Location = new Point(3, 3);
+        otmrLiveControl.Name = "otmrLiveControl";
+        otmrLiveControl.Size = new Size(1486, 795);
 
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
@@ -598,31 +464,24 @@ partial class MainForm
         MinimumSize = new Size(1100, 700);
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "OTMR CCF Editor / Creator v0.2";
+        Text = "OTMR CCF Editor / Creator v0.2 - test OTMR M1";
         FormClosing += MainForm_FormClosing;
-        menuStrip.ResumeLayout(false);
-        menuStrip.PerformLayout();
-        toolStrip.ResumeLayout(false);
-        toolStrip.PerformLayout();
-        statusStrip.ResumeLayout(false);
-        statusStrip.PerformLayout();
+
+        menuStrip.ResumeLayout(false); menuStrip.PerformLayout();
+        toolStrip.ResumeLayout(false); toolStrip.PerformLayout();
+        statusStrip.ResumeLayout(false); statusStrip.PerformLayout();
         tabs.ResumeLayout(false);
         recordsTab.ResumeLayout(false);
-        recordsSplit.Panel1.ResumeLayout(false);
-        recordsSplit.Panel2.ResumeLayout(false);
-        ((System.ComponentModel.ISupportInitialize)recordsSplit).EndInit();
-        recordsSplit.ResumeLayout(false);
+        recordsSplit.Panel1.ResumeLayout(false); recordsSplit.Panel2.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)recordsSplit).EndInit(); recordsSplit.ResumeLayout(false);
         recordsTopTable.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)recordsGrid).EndInit();
-        fieldHelpGroupBox.ResumeLayout(false);
-        fieldHelpGroupBox.PerformLayout();
-        detailsTable.ResumeLayout(false);
-        detailsTable.PerformLayout();
-        headerTab.ResumeLayout(false);
-        ((System.ComponentModel.ISupportInitialize)headerGrid).EndInit();
-        hexTab.ResumeLayout(false);
-        ((System.ComponentModel.ISupportInitialize)hexGrid).EndInit();
+        fieldHelpGroupBox.ResumeLayout(false); fieldHelpGroupBox.PerformLayout();
+        detailsTable.ResumeLayout(false); detailsTable.PerformLayout();
+        headerTab.ResumeLayout(false); ((System.ComponentModel.ISupportInitialize)headerGrid).EndInit();
+        hexTab.ResumeLayout(false); ((System.ComponentModel.ISupportInitialize)hexGrid).EndInit();
         validationTab.ResumeLayout(false);
+        otmrLiveTab.ResumeLayout(false);
         ResumeLayout(false);
         PerformLayout();
     }
