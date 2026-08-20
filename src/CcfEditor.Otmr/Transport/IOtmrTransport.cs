@@ -4,6 +4,7 @@ public interface IOtmrTransport : IDisposable
 {
     bool IsConnected { get; }
     event EventHandler<OtmrBytesReceivedEventArgs>? BytesReceived;
+    event EventHandler<OtmrBytesTransmittedEventArgs>? BytesTransmitted;
     event EventHandler<OtmrTransportErrorEventArgs>? ErrorOccurred;
 
     Task ConnectAsync(OtmrSerialSettings settings, CancellationToken cancellationToken = default);
@@ -14,6 +15,12 @@ public interface IOtmrTransport : IDisposable
 public sealed class OtmrBytesReceivedEventArgs : EventArgs
 {
     public OtmrBytesReceivedEventArgs(byte[] data) => Data = data.ToArray();
+    public byte[] Data { get; }
+}
+
+public sealed class OtmrBytesTransmittedEventArgs : EventArgs
+{
+    public OtmrBytesTransmittedEventArgs(byte[] data) => Data = data.ToArray();
     public byte[] Data { get; }
 }
 
