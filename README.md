@@ -1,5 +1,12 @@
 # OTMR CCF Editor / Creator — .NET 8 WinForms
 
+Current application revision: **v0.2**.
+
+## Revision history
+
+- **v0.1** — initial usable CCF viewer/editor foundation with CCF-only data provenance, Save As protection and per-app startup authorisation.
+- **v0.2** — adds the permanent right-hand Records field-description/schema-help pane, visible application revision and executable version metadata.
+
 This is a Visual Studio WinForms Designer project.
 
 ## Data provenance
@@ -13,13 +20,13 @@ The visible CCF data comes only from the `.ccf` file explicitly opened by the us
 
 No J1 spreadsheet, TSV, Class 171 mapping table, demo data, sample records, or fallback configuration is bundled or auto-loaded by the application.
 
-The header `Meaning` labels are schema metadata for known offsets; the displayed raw/decoded values are from the opened file.
+The header `Meaning` labels and the Records field-description pane are schema/help metadata. Actual displayed current values are read from the CCF that the user opened.
 
 External mapping/import functionality can be added later only as an explicit user action and must remain clearly separate from CCF-derived data.
 
 ## Editing
 
-Editing now writes directly to the working byte array. The application does not rebuild or reserialize the full CCF, so unknown bytes remain untouched unless the user edits a field that owns those exact bytes.
+Editing writes directly to the working byte array. The application does not rebuild or reserialize the full CCF, so unknown bytes remain untouched unless the user edits a field that owns those exact bytes.
 
 Editable record grid fields:
 
@@ -42,15 +49,28 @@ The Hex view is rebuilt from the working bytes after every edit. Changed hex row
 
 Saving is **Save As only**. The source `.ccf` is never silently overwritten. The saved file is read back and verified against the complete working byte array and working SHA-256.
 
+## Records field description pane
+
+The Records tab contains a permanent right-hand `Field description / schema help` pane. Clicking any record cell shows:
+
+- field name
+- current value from the opened CCF
+- relative and absolute CCF byte location
+- whether the field is editable
+- a description of the field and any type-specific restrictions
+
+For digital-only fields such as Pair, OFF text and ON text, the pane explicitly warns when the selected record is not Type 2. It also avoids inventing meanings for incompletely decoded values such as Logger and Hardware Function codes.
+
 ## Visual Studio Designer
 
 `MainForm.cs` contains application logic.
 `MainForm.Designer.cs` contains the form controls/layout.
+`MainForm.FieldHelp.cs` contains the field-help behaviour only.
 `MainForm.resx` is linked to the form.
 
 Right-click `MainForm.cs` -> **View Designer**.
 
-The editing UI uses the existing Designer-managed grids and controls; it does not create a runtime-generated editor form.
+The editing UI and right-side help pane are Designer-managed controls; the program does not construct the GUI dynamically at runtime.
 
 ## Remote startup gate
 
