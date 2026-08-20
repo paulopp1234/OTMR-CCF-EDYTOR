@@ -9,7 +9,7 @@ public static class CcfFileService
 
         var fullOutputPath = Path.GetFullPath(outputPath);
         if (document.SourcePath is not null && PathsEqual(document.SourcePath, fullOutputPath))
-            throw new InvalidOperationException("Milestone 1 uses Save As only. Refusing to overwrite the source CCF.");
+            throw new InvalidOperationException("Save As only. Refusing to overwrite the source CCF.");
 
         var directory = Path.GetDirectoryName(fullOutputPath);
         if (!string.IsNullOrEmpty(directory))
