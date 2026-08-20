@@ -18,5 +18,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CcfEditor.Core\CcfEditor.Core.csproj" />
+    <ProjectReference Include="..\..\src\CcfEditor.Otmr\CcfEditor.Otmr.csproj" />
   </ItemGroup>
 </Project>
