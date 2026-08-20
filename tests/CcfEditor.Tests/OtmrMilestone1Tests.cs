@@ -52,7 +52,7 @@ public sealed class OtmrMilestone1Tests
     }
 
     [Fact]
-    public async Task CaptureWriter_PreservesTimestampDirectionAndRawHex()
+    public async Task JsonLinesCaptureWriter_PreservesTimestampDirectionAndRawHex()
     {
         string temp = Path.Combine(Path.GetTempPath(), $"otmr_{Guid.NewGuid():N}.jsonl");
         var entry = new OtmrCaptureEntry(
@@ -68,6 +68,41 @@ public sealed class OtmrMilestone1Tests
             Assert.Contains("RX", text);
             Assert.Contains("01 01 00 FC AB", text);
             Assert.Contains("2026-08-20", text);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+                File.Delete(temp);
+        }
+    }
+
+    [Fact]
+    public async Task TextCaptureWriter_IsHumanReadableAndPreservesRawHex()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), $"otmr_{Guid.NewGuid():N}.txt");
+        var entries = new[]
+        {
+            new OtmrCaptureEntry(
+                new DateTimeOffset(2026, 8, 20, 20, 11, 42, TimeSpan.Zero).AddMilliseconds(134),
+                OtmrDirection.Tx,
+                new byte[] { 0xFC, 0xAB }),
+            new OtmrCaptureEntry(
+                new DateTimeOffset(2026, 8, 20, 20, 11, 42, TimeSpan.Zero).AddMilliseconds(159),
+                OtmrDirection.Rx,
+                new byte[] { 0x01, 0x01, 0x00 })
+        };
+
+        try
+        {
+            await OtmrCaptureWriter.WriteTextAsync(temp, entries);
+            string text = await File.ReadAllTextAsync(temp);
+
+            Assert.Contains("OTMR RAW CAPTURE", text);
+            Assert.Contains("TX", text);
+            Assert.Contains("FC AB", text);
+            Assert.Contains("RX", text);
+            Assert.Contains("01 01 00", text);
+            Assert.Contains("2026-08-20T20:11:42.134", text);
         }
         finally
         {
