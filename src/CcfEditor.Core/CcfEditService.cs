@@ -54,7 +54,9 @@ public static class CcfEditService
     {
         CcfRecord record = GetRecord(document, recordIndex);
         byte[] colour = ParseFourByteHex(value);
-        colour.CopyTo(document.WorkingBytesBuffer, record.Offset + CcfFieldDefinitions.Record.Colour);
+        colour.AsSpan().CopyTo(document.WorkingBytesBuffer.AsSpan(
+            record.Offset + CcfFieldDefinitions.Record.Colour,
+            CcfFieldDefinitions.Record.ColourLength));
     }
 
     public static void SetDigitalOffDescription(CcfDocument document, int recordIndex, string value)
@@ -137,7 +139,7 @@ public static class CcfEditService
     public static void RestoreAll(CcfDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        document.OriginalBytesSpan.CopyTo(document.WorkingBytesBuffer);
+        document.OriginalBytesSpan.CopyTo(document.WorkingBytesBuffer.AsSpan());
     }
 
     public static void ValidateFixedAscii(string value, int fieldLength)
