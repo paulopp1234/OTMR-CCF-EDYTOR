@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Text;
 using CcfEditor.Core;
 using CcfEditor.WinForms.Models;
@@ -15,6 +16,7 @@ public partial class MainForm : Form
     private List<RecordGridRow> _allRecordRows = new();
     private List<HexLineRow> _hexRows = new();
     private int? _selectedRecordIndex;
+    private bool _isRefreshingUi;
 
     public MainForm()
     {
@@ -27,6 +29,9 @@ public partial class MainForm : Form
 
     private void OpenMenuItem_Click(object? sender, EventArgs e)
     {
+        if (_document?.IsModified == true && !ConfirmDiscardChanges())
+            return;
+
         using var dialog = new OpenFileDialog
         {
             Filter = "CCF files (*.ccf)|*.ccf|All files (*.*)|*.*",
@@ -53,13 +58,15 @@ public partial class MainForm : Form
         if (_document is null)
             return;
 
+        int changedBytes = _document.GetByteChanges().Count;
         string baseName = Path.GetFileNameWithoutExtension(_document.SourcePath ?? "ccf");
-        string suggested = $"{baseName}_NOEDIT_{DateTime.Now:yyyyMMdd_HHmmss}.ccf";
+        string suffix = changedBytes == 0 ? "COPY" : "EDITED";
+        string suggested = $"{baseName}_{suffix}_{DateTime.Now:yyyyMMdd_HHmmss}.ccf";
 
         using var dialog = new SaveFileDialog
         {
             Filter = "CCF files (*.ccf)|*.ccf|All files (*.*)|*.*",
-            Title = "Save byte-identical no-edit copy",
+            Title = "Save CCF As",
             FileName = suggested,
             AddExtension = true,
             DefaultExt = "ccf",
@@ -74,17 +81,18 @@ public partial class MainForm : Form
             SaveVerification verification = CcfFileService.SaveAs(_document, dialog.FileName);
             string result =
                 $"Saved: {verification.OutputPath}{Environment.NewLine}{Environment.NewLine}" +
+                $"Changed bytes versus opened file: {changedBytes}{Environment.NewLine}{Environment.NewLine}" +
                 $"Original SHA-256:{Environment.NewLine}{verification.OriginalSha256}{Environment.NewLine}{Environment.NewLine}" +
-                $"Output SHA-256:{Environment.NewLine}{verification.OutputSha256}{Environment.NewLine}{Environment.NewLine}" +
-                $"Byte-identical: {verification.OutputMatchesWorkingBytes}{Environment.NewLine}" +
-                $"No-edit SHA matches original: {verification.NoEditShaMatchesOriginal}";
+                $"Working SHA-256:{Environment.NewLine}{verification.WorkingSha256}{Environment.NewLine}{Environment.NewLine}" +
+                $"Saved SHA-256:{Environment.NewLine}{verification.OutputSha256}{Environment.NewLine}{Environment.NewLine}" +
+                $"Saved file matches working bytes: {verification.OutputMatchesWorkingBytes}";
 
             MessageBox.Show(
                 this,
                 result,
-                verification.NoEditShaMatchesOriginal ? "Save verified" : "Save verification FAILED",
+                verification.OutputMatchesWorkingBytes ? "Save verified" : "Save verification FAILED",
                 MessageBoxButtons.OK,
-                verification.NoEditShaMatchesOriginal ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+                verification.OutputMatchesWorkingBytes ? MessageBoxIcon.Information : MessageBoxIcon.Error);
         }
         catch (Exception ex)
         {
@@ -94,10 +102,17 @@ public partial class MainForm : Form
 
     private void ExitMenuItem_Click(object? sender, EventArgs e) => Close();
 
-    private void SearchTextBox_TextChanged(object? sender, EventArgs e) => ApplyRecordFilter();
+    private void SearchTextBox_TextChanged(object? sender, EventArgs e)
+    {
+        if (!_isRefreshingUi)
+            ApplyRecordFilter();
+    }
 
     private void RecordsGrid_SelectionChanged(object? sender, EventArgs e)
     {
+        if (_isRefreshingUi)
+            return;
+
         if (recordsGrid.CurrentRow?.DataBoundItem is not RecordGridRow row || _document is null)
             return;
 
@@ -116,27 +131,187 @@ public partial class MainForm : Form
         SelectRecord(pair, scrollRecordsGrid: true);
     }
 
+    private void RecordsGrid_CellBeginEdit(object? sender, DataGridViewCellCancelEventArgs e)
+    {
+        if (_isRefreshingUi || _document is null || e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        if (recordsGrid.Rows[e.RowIndex].DataBoundItem is not RecordGridRow row)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        string property = recordsGrid.Columns[e.ColumnIndex].DataPropertyName;
+        if (property is nameof(RecordGridRow.Pair) or nameof(RecordGridRow.OffText) or nameof(RecordGridRow.OnText))
+        {
+            if (_document.Records[row.Record].Type != 2)
+            {
+                e.Cancel = true;
+                fileStatusLabel.Text = $"Record {row.Record}: OFF/ON/pair editing is only valid for digital type 2 records.";
+            }
+        }
+    }
+
+    private void RecordsGrid_CellValidating(object? sender, DataGridViewCellValidatingEventArgs e)
+    {
+        if (_isRefreshingUi || _document is null || e.RowIndex < 0 || e.ColumnIndex < 0)
+            return;
+
+        if (recordsGrid.Rows[e.RowIndex].DataBoundItem is not RecordGridRow row)
+            return;
+
+        string property = recordsGrid.Columns[e.ColumnIndex].DataPropertyName;
+        string value = e.FormattedValue?.ToString() ?? string.Empty;
+
+        try
+        {
+            ValidateRecordCell(row.Record, property, value);
+            recordsGrid.Rows[e.RowIndex].ErrorText = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            e.Cancel = true;
+            recordsGrid.Rows[e.RowIndex].ErrorText = ex.Message;
+        }
+    }
+
+    private void RecordsGrid_CellEndEdit(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (_isRefreshingUi || _document is null || e.RowIndex < 0 || e.ColumnIndex < 0)
+            return;
+
+        recordsGrid.Rows[e.RowIndex].ErrorText = string.Empty;
+        if (recordsGrid.Rows[e.RowIndex].DataBoundItem is not RecordGridRow row)
+            return;
+
+        string property = recordsGrid.Columns[e.ColumnIndex].DataPropertyName;
+        string value = Convert.ToString(recordsGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value, CultureInfo.InvariantCulture) ?? string.Empty;
+
+        try
+        {
+            ApplyRecordEdit(row.Record, property, value);
+            RefreshAfterEdit(row.Record);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Record edit rejected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            RefreshAfterEdit(row.Record);
+        }
+    }
+
+    private void RecordsGrid_DataError(object? sender, DataGridViewDataErrorEventArgs e)
+    {
+        e.ThrowException = false;
+        if (e.RowIndex >= 0 && e.RowIndex < recordsGrid.Rows.Count)
+            recordsGrid.Rows[e.RowIndex].ErrorText = e.Exception?.Message ?? "Invalid value.";
+    }
+
+    private void HeaderGrid_CellBeginEdit(object? sender, DataGridViewCellCancelEventArgs e)
+    {
+        if (_isRefreshingUi || _document is null || e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        if (headerGrid.Rows[e.RowIndex].DataBoundItem is not HeaderFieldRow row ||
+            headerGrid.Columns[e.ColumnIndex].DataPropertyName != nameof(HeaderFieldRow.Decoded) ||
+            !row.Editable)
+        {
+            e.Cancel = true;
+        }
+    }
+
+    private void HeaderGrid_CellValidating(object? sender, DataGridViewCellValidatingEventArgs e)
+    {
+        if (_isRefreshingUi || _document is null || e.RowIndex < 0 || e.ColumnIndex < 0)
+            return;
+
+        if (headerGrid.Rows[e.RowIndex].DataBoundItem is not HeaderFieldRow row ||
+            headerGrid.Columns[e.ColumnIndex].DataPropertyName != nameof(HeaderFieldRow.Decoded) ||
+            !row.Editable)
+            return;
+
+        string value = e.FormattedValue?.ToString() ?? string.Empty;
+        try
+        {
+            ValidateHeaderCell(row, value);
+            headerGrid.Rows[e.RowIndex].ErrorText = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            e.Cancel = true;
+            headerGrid.Rows[e.RowIndex].ErrorText = ex.Message;
+        }
+    }
+
+    private void HeaderGrid_CellEndEdit(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (_isRefreshingUi || _document is null || e.RowIndex < 0 || e.ColumnIndex < 0)
+            return;
+
+        headerGrid.Rows[e.RowIndex].ErrorText = string.Empty;
+        if (headerGrid.Rows[e.RowIndex].DataBoundItem is not HeaderFieldRow row || !row.Editable)
+            return;
+
+        string value = Convert.ToString(headerGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value, CultureInfo.InvariantCulture) ?? string.Empty;
+        try
+        {
+            ApplyHeaderEdit(row, value);
+            RefreshAfterEdit(_selectedRecordIndex);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Header edit rejected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            RefreshAfterEdit(_selectedRecordIndex);
+        }
+    }
+
+    private void HeaderGrid_DataError(object? sender, DataGridViewDataErrorEventArgs e)
+    {
+        e.ThrowException = false;
+        if (e.RowIndex >= 0 && e.RowIndex < headerGrid.Rows.Count)
+            headerGrid.Rows[e.RowIndex].ErrorText = e.Exception?.Message ?? "Invalid value.";
+    }
+
+    private void MainForm_FormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (_document?.IsModified == true && !ConfirmDiscardChanges())
+            e.Cancel = true;
+    }
+
+    private bool ConfirmDiscardChanges()
+    {
+        if (_document?.IsModified != true)
+            return true;
+
+        int changedBytes = _document.GetByteChanges().Count;
+        DialogResult result = MessageBox.Show(
+            this,
+            $"The opened CCF has unsaved working changes ({changedBytes} changed bytes).{Environment.NewLine}{Environment.NewLine}Discard them?",
+            "Unsaved CCF changes",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+
+        return result == DialogResult.Yes;
+    }
+
     private void LoadCcf(string path)
     {
         CcfDocument document = CcfParser.Load(path);
         _document = document;
-
-        _allRecordRows = document.Records.Select(ToRecordRow).ToList();
-        _hexRows = BuildHexRows(document.GetWorkingBytesSnapshot());
+        _selectedRecordIndex = null;
 
         searchTextBox.Text = string.Empty;
-        _recordsBinding.DataSource = _allRecordRows;
-        _headerBinding.DataSource = BuildHeaderRows(document);
-        _hexBinding.DataSource = _hexRows;
-
-        PopulateValidation(document);
-        fileStatusLabel.Text = $"{Path.GetFileName(path)}  |  {document.Length:N0} bytes  |  {document.Records.Count} records";
-        shaStatusLabel.Text = $"SHA-256: {document.OriginalSha256}";
         saveCopyMenuItem.Enabled = true;
         saveCopyButton.Enabled = true;
 
-        if (_allRecordRows.Count > 0)
-            SelectRecord(0, scrollRecordsGrid: true);
+        RefreshAfterEdit(0);
     }
 
     private void ApplyRecordFilter()
@@ -148,19 +323,54 @@ public partial class MainForm : Form
             return;
         }
 
-        string needle = filter.ToUpperInvariant();
         List<RecordGridRow> filtered = _allRecordRows.Where(row =>
-            row.Record.ToString().Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-            row.EventIndex.ToString().Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-            row.Name.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-            row.Pair.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-            row.OffText.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-            row.OnText.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-            row.Card.ToString().Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-            row.Channel.ToString().Contains(needle, StringComparison.OrdinalIgnoreCase))
+            row.Record.ToString().Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.EventIndex.ToString().Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.ColourHex.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.Pair.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.OffText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.OnText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.Card.ToString().Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            row.Channel.ToString().Contains(filter, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         _recordsBinding.DataSource = filtered;
+    }
+
+    private void RefreshAfterEdit(int? recordIndex)
+    {
+        if (_document is null)
+            return;
+
+        _isRefreshingUi = true;
+        try
+        {
+            _allRecordRows = _document.Records.Select(ToRecordRow).ToList();
+            _hexRows = BuildHexRows(_document.GetWorkingBytesSnapshot());
+
+            ApplyRecordFilter();
+            _headerBinding.DataSource = BuildHeaderRows(_document);
+            _hexBinding.DataSource = _hexRows;
+
+            PopulateValidation(_document);
+            UpdateStatus(_document);
+        }
+        finally
+        {
+            _isRefreshingUi = false;
+        }
+
+        if (recordIndex.HasValue && recordIndex.Value >= 0 && recordIndex.Value < CcfConstants.RecordCount)
+            SelectRecord(recordIndex.Value, scrollRecordsGrid: true);
+    }
+
+    private void UpdateStatus(CcfDocument document)
+    {
+        int changes = document.GetByteChanges().Count;
+        string modified = changes == 0 ? "Unmodified" : $"MODIFIED: {changes} byte(s)";
+        fileStatusLabel.Text = $"{Path.GetFileName(document.SourcePath)}  |  {document.Length:N0} bytes  |  {document.Records.Count} records  |  {modified}";
+        shaStatusLabel.Text = $"Working SHA-256: {document.WorkingSha256}";
     }
 
     private void SelectRecord(int recordIndex, bool scrollRecordsGrid)
@@ -204,18 +414,40 @@ public partial class MainForm : Form
 
     private void HighlightHexRecord(int recordIndex)
     {
+        if (_document is null)
+            return;
+
         int start = CcfConstants.GetRecordOffset(recordIndex);
         int endExclusive = start + CcfConstants.RecordSize;
         int firstHighlightedRow = -1;
+        HashSet<int> changedOffsets = _document.GetByteChanges().Select(change => change.Offset).ToHashSet();
 
         foreach (DataGridViewRow gridRow in hexGrid.Rows)
         {
             if (gridRow.DataBoundItem is not HexLineRow line)
                 continue;
 
-            bool overlaps = line.OffsetValue < endExclusive && line.OffsetValue + 16 > start;
-            gridRow.DefaultCellStyle.BackColor = overlaps ? Color.LightGoldenrodYellow : Color.White;
-            if (overlaps && firstHighlightedRow < 0)
+            bool selectedRecord = line.OffsetValue < endExclusive && line.OffsetValue + 16 > start;
+            bool changed = false;
+            int lineEnd = Math.Min(line.OffsetValue + 16, _document.Length);
+            for (int offset = line.OffsetValue; offset < lineEnd; offset++)
+            {
+                if (changedOffsets.Contains(offset))
+                {
+                    changed = true;
+                    break;
+                }
+            }
+
+            gridRow.DefaultCellStyle.BackColor = selectedRecord && changed
+                ? Color.Orange
+                : selectedRecord
+                    ? Color.LightGoldenrodYellow
+                    : changed
+                        ? Color.MistyRose
+                        : Color.White;
+
+            if (selectedRecord && firstHighlightedRow < 0)
                 firstHighlightedRow = gridRow.Index;
         }
 
@@ -227,16 +459,135 @@ public partial class MainForm : Form
     {
         validationList.Items.Clear();
         IReadOnlyList<CcfValidationIssue> issues = CcfValidator.ValidateMilestone1(document);
+        int changedBytes = document.GetByteChanges().Count;
 
         validationList.Items.Add(new ListViewItem(new[]
         {
-            document.IsByteIdenticalToOriginal ? "Information" : "Error",
-            $"Original SHA-256 = {document.OriginalSha256}; Working SHA-256 = {document.WorkingSha256}; identical = {document.IsByteIdenticalToOriginal}."
+            changedBytes == 0 ? "Information" : "Modified",
+            $"Original SHA-256 = {document.OriginalSha256}; Working SHA-256 = {document.WorkingSha256}; changed bytes = {changedBytes}."
         }));
 
         foreach (CcfValidationIssue issue in issues)
         {
             validationList.Items.Add(new ListViewItem(new[] { issue.Severity.ToString(), issue.Message }));
+        }
+    }
+
+    private static void ValidateRecordCell(int recordIndex, string property, string value)
+    {
+        _ = recordIndex;
+        switch (property)
+        {
+            case nameof(RecordGridRow.Type):
+            case nameof(RecordGridRow.Card):
+            case nameof(RecordGridRow.Channel):
+            case nameof(RecordGridRow.LoggerMode):
+            case nameof(RecordGridRow.HardwareFunction):
+                if (!byte.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                    throw new FormatException("Value must be an integer from 0 to 255.");
+                break;
+
+            case nameof(RecordGridRow.Pair):
+                if (!ushort.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out ushort pair) || pair >= CcfConstants.RecordCount)
+                    throw new FormatException("Pair record must be an integer from 0 to 255.");
+                break;
+
+            case nameof(RecordGridRow.Name):
+                CcfEditService.ValidateFixedAscii(value, CcfFieldDefinitions.Record.NameLength);
+                break;
+
+            case nameof(RecordGridRow.OffText):
+                CcfEditService.ValidateFixedAscii(value, CcfFieldDefinitions.Digital.OffDescriptionLength);
+                break;
+
+            case nameof(RecordGridRow.OnText):
+                CcfEditService.ValidateFixedAscii(value, CcfFieldDefinitions.Digital.OnDescriptionLength);
+                break;
+
+            case nameof(RecordGridRow.ColourHex):
+                _ = CcfEditService.ParseFourByteHex(value);
+                break;
+        }
+    }
+
+    private void ApplyRecordEdit(int recordIndex, string property, string value)
+    {
+        if (_document is null)
+            return;
+
+        switch (property)
+        {
+            case nameof(RecordGridRow.Type):
+                CcfEditService.SetRecordType(_document, recordIndex, byte.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            case nameof(RecordGridRow.Name):
+                CcfEditService.SetRecordName(_document, recordIndex, value);
+                break;
+            case nameof(RecordGridRow.ColourHex):
+                CcfEditService.SetRecordColourHex(_document, recordIndex, value);
+                break;
+            case nameof(RecordGridRow.Card):
+                CcfEditService.SetRecordCard(_document, recordIndex, byte.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            case nameof(RecordGridRow.Channel):
+                CcfEditService.SetRecordChannel(_document, recordIndex, byte.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            case nameof(RecordGridRow.LoggerMode):
+                CcfEditService.SetRecordLoggerMode(_document, recordIndex, byte.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            case nameof(RecordGridRow.HardwareFunction):
+                CcfEditService.SetRecordHardwareFunction(_document, recordIndex, byte.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            case nameof(RecordGridRow.Pair):
+                CcfEditService.SetDigitalPairRecord(_document, recordIndex, ushort.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            case nameof(RecordGridRow.OffText):
+                CcfEditService.SetDigitalOffDescription(_document, recordIndex, value);
+                break;
+            case nameof(RecordGridRow.OnText):
+                CcfEditService.SetDigitalOnDescription(_document, recordIndex, value);
+                break;
+        }
+    }
+
+    private static void ValidateHeaderCell(HeaderFieldRow row, string value)
+    {
+        switch (row.EditKind)
+        {
+            case HeaderEditKind.Ascii:
+                CcfEditService.ValidateFixedAscii(value, row.Length);
+                break;
+            case HeaderEditKind.Byte:
+                if (!byte.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                    throw new FormatException("Value must be an integer from 0 to 255.");
+                break;
+            case HeaderEditKind.UInt16:
+                if (!ushort.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                    throw new FormatException("Value must be an integer from 0 to 65535.");
+                break;
+            default:
+                throw new InvalidOperationException("This header field is read-only because its encoding is not sufficiently proven.");
+        }
+    }
+
+    private void ApplyHeaderEdit(HeaderFieldRow row, string value)
+    {
+        if (_document is null)
+            return;
+
+        switch (row.EditKind)
+        {
+            case HeaderEditKind.Ascii:
+                CcfEditService.SetHeaderAscii(_document, row.OffsetValue, row.Length, value);
+                break;
+            case HeaderEditKind.Byte:
+                CcfEditService.SetHeaderByte(_document, row.OffsetValue, byte.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            case HeaderEditKind.UInt16:
+                CcfEditService.SetHeaderUInt16(_document, row.OffsetValue, ushort.Parse(value, CultureInfo.InvariantCulture));
+                break;
+            default:
+                throw new InvalidOperationException("This header field is read-only.");
         }
     }
 
@@ -249,6 +600,7 @@ public partial class MainForm : Form
             Type = record.Type,
             Flag = record.ClassificationFlag,
             Name = record.Name,
+            ColourHex = Convert.ToHexString(record.GetRawBytes(CcfFieldDefinitions.Record.Colour, CcfFieldDefinitions.Record.ColourLength)),
             Card = record.Card,
             Channel = record.Channel,
             LoggerMode = record.LoggerMode,
@@ -285,37 +637,40 @@ public partial class MainForm : Form
         byte[] bytes = document.GetWorkingBytesSnapshot();
         var rows = new List<HeaderFieldRow>();
 
-        AddHeader(rows, bytes, 0x002E, 2, "Profile / family word", $"0x{document.Header.ProfileFamilyWord:X4}");
-        AddHeader(rows, bytes, 0x01B0, 8, "Firmware / version", AsciiPreview(bytes, 0x01B0, 8));
-        AddHeader(rows, bytes, 0x01B8, 8, "Serial core", AsciiPreview(bytes, 0x01B8, 8));
-        AddHeader(rows, bytes, 0x01C0, 10, "Vehicle", AsciiPreview(bytes, 0x01C0, 10));
-        AddHeader(rows, bytes, 0x01CA, 7, "Unit", AsciiPreview(bytes, 0x01CA, 7));
-        AddHeader(rows, bytes, 0x01D1, 8, "Vehicle type", AsciiPreview(bytes, 0x01D1, 8));
-        AddHeader(rows, bytes, 0x01F9, 1, "Cards fitted", bytes[0x01F9].ToString());
-        AddHeader(rows, bytes, 0x01FA, 8, "JP6", "Raw array");
-        AddHeader(rows, bytes, 0x0202, 8, "JP12", "Raw array");
-        AddHeader(rows, bytes, 0x0228, 4, "Mileage", "Raw only - field width/encoding not assumed");
-        AddHeader(rows, bytes, 0x022C, 2, "Wheel 1", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x022C, 2)).ToString());
-        AddHeader(rows, bytes, 0x022E, 2, "Wheel 2", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x022E, 2)).ToString());
-        AddHeader(rows, bytes, 0x0230, 1, "Pulses / rev", bytes[0x0230].ToString());
-        AddHeader(rows, bytes, 0x0231, 1, "Unknown", bytes[0x0231].ToString());
-        AddHeader(rows, bytes, 0x025C, 1, "Poll", bytes[0x025C].ToString());
-        AddHeader(rows, bytes, 0x025D, 1, "No-event", bytes[0x025D].ToString());
-        AddHeader(rows, bytes, 0x025E, 1, "Sample count", bytes[0x025E].ToString());
-        AddHeader(rows, bytes, 0x025F, 2, "Distance trigger", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x025F, 2)).ToString());
-        AddHeader(rows, bytes, 0x0261, 2, "Mid-journey", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x0261, 2)).ToString());
+        AddHeader(rows, bytes, 0x002E, 2, "Profile / family word", $"0x{document.Header.ProfileFamilyWord:X4}", HeaderEditKind.None);
+        AddHeader(rows, bytes, 0x01B0, 8, "Firmware / version", AsciiPreview(bytes, 0x01B0, 8), HeaderEditKind.Ascii);
+        AddHeader(rows, bytes, 0x01B8, 8, "Serial core", AsciiPreview(bytes, 0x01B8, 8), HeaderEditKind.Ascii);
+        AddHeader(rows, bytes, 0x01C0, 10, "Vehicle", AsciiPreview(bytes, 0x01C0, 10), HeaderEditKind.Ascii);
+        AddHeader(rows, bytes, 0x01CA, 7, "Unit", AsciiPreview(bytes, 0x01CA, 7), HeaderEditKind.Ascii);
+        AddHeader(rows, bytes, 0x01D1, 8, "Vehicle type", AsciiPreview(bytes, 0x01D1, 8), HeaderEditKind.Ascii);
+        AddHeader(rows, bytes, 0x01F9, 1, "Cards fitted", bytes[0x01F9].ToString(CultureInfo.InvariantCulture), HeaderEditKind.Byte);
+        AddHeader(rows, bytes, 0x01FA, 8, "JP6", "Raw array", HeaderEditKind.None);
+        AddHeader(rows, bytes, 0x0202, 8, "JP12", "Raw array", HeaderEditKind.None);
+        AddHeader(rows, bytes, 0x0228, 4, "Mileage", "Raw only - field width/encoding not assumed", HeaderEditKind.None);
+        AddHeader(rows, bytes, 0x022C, 2, "Wheel 1", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x022C, 2)).ToString(CultureInfo.InvariantCulture), HeaderEditKind.UInt16);
+        AddHeader(rows, bytes, 0x022E, 2, "Wheel 2", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x022E, 2)).ToString(CultureInfo.InvariantCulture), HeaderEditKind.UInt16);
+        AddHeader(rows, bytes, 0x0230, 1, "Pulses / rev", bytes[0x0230].ToString(CultureInfo.InvariantCulture), HeaderEditKind.Byte);
+        AddHeader(rows, bytes, 0x0231, 1, "Unknown", bytes[0x0231].ToString(CultureInfo.InvariantCulture), HeaderEditKind.None);
+        AddHeader(rows, bytes, 0x025C, 1, "Poll", bytes[0x025C].ToString(CultureInfo.InvariantCulture), HeaderEditKind.Byte);
+        AddHeader(rows, bytes, 0x025D, 1, "No-event", bytes[0x025D].ToString(CultureInfo.InvariantCulture), HeaderEditKind.Byte);
+        AddHeader(rows, bytes, 0x025E, 1, "Sample count", bytes[0x025E].ToString(CultureInfo.InvariantCulture), HeaderEditKind.Byte);
+        AddHeader(rows, bytes, 0x025F, 2, "Distance trigger", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x025F, 2)).ToString(CultureInfo.InvariantCulture), HeaderEditKind.UInt16);
+        AddHeader(rows, bytes, 0x0261, 2, "Mid-journey", BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x0261, 2)).ToString(CultureInfo.InvariantCulture), HeaderEditKind.UInt16);
 
         return rows;
     }
 
-    private static void AddHeader(List<HeaderFieldRow> rows, byte[] bytes, int offset, int length, string meaning, string decoded)
+    private static void AddHeader(List<HeaderFieldRow> rows, byte[] bytes, int offset, int length, string meaning, string decoded, HeaderEditKind editKind)
     {
         rows.Add(new HeaderFieldRow
         {
             Offset = $"0x{offset:X4}",
+            OffsetValue = offset,
+            Length = length,
             Meaning = meaning,
             RawHex = Convert.ToHexString(bytes.AsSpan(offset, length)),
-            Decoded = decoded
+            Decoded = decoded,
+            EditKind = editKind
         });
     }
 
