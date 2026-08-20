@@ -14,6 +14,7 @@ public sealed class OtmrLiveService : IDisposable
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _transport.BytesReceived += Transport_BytesReceived;
+        _transport.BytesTransmitted += Transport_BytesTransmitted;
         _transport.ErrorOccurred += Transport_ErrorOccurred;
     }
 
@@ -54,9 +55,14 @@ public sealed class OtmrLiveService : IDisposable
             _capture.Clear();
     }
 
-    private void Transport_BytesReceived(object? sender, OtmrBytesReceivedEventArgs e)
+    private void Transport_BytesReceived(object? sender, OtmrBytesReceivedEventArgs e) =>
+        AddCapture(new OtmrCaptureEntry(DateTimeOffset.Now, OtmrDirection.Rx, e.Data));
+
+    private void Transport_BytesTransmitted(object? sender, OtmrBytesTransmittedEventArgs e) =>
+        AddCapture(new OtmrCaptureEntry(DateTimeOffset.Now, OtmrDirection.Tx, e.Data));
+
+    private void AddCapture(OtmrCaptureEntry entry)
     {
-        var entry = new OtmrCaptureEntry(DateTimeOffset.Now, OtmrDirection.Rx, e.Data);
         lock (_captureSync)
             _capture.Add(entry);
         CaptureAdded?.Invoke(this, new OtmrCaptureEntryEventArgs(entry));
@@ -83,6 +89,7 @@ public sealed class OtmrLiveService : IDisposable
         }
 
         _transport.BytesReceived -= Transport_BytesReceived;
+        _transport.BytesTransmitted -= Transport_BytesTransmitted;
         _transport.ErrorOccurred -= Transport_ErrorOccurred;
         _transport.Dispose();
         _disposed = true;
