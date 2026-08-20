@@ -29,6 +29,9 @@ partial class OtmrLiveControl
     private FlowLayoutPanel captureButtonsPanel = null!;
     private Button clearCaptureButton = null!;
     private Button saveCaptureButton = null!;
+    private Button copyHexButton = null!;
+    private Label filterLabel = null!;
+    private ComboBox captureFilterComboBox = null!;
     private Label captureCountLabel = null!;
     private Label statusLabel = null!;
 
@@ -68,6 +71,9 @@ partial class OtmrLiveControl
         captureButtonsPanel = new FlowLayoutPanel();
         clearCaptureButton = new Button();
         saveCaptureButton = new Button();
+        copyHexButton = new Button();
+        filterLabel = new Label();
+        captureFilterComboBox = new ComboBox();
         captureCountLabel = new Label();
         statusLabel = new Label();
         rootLayout.SuspendLayout();
@@ -231,24 +237,60 @@ partial class OtmrLiveControl
         // 
         captureButtonsPanel.Controls.Add(clearCaptureButton);
         captureButtonsPanel.Controls.Add(saveCaptureButton);
+        captureButtonsPanel.Controls.Add(copyHexButton);
+        captureButtonsPanel.Controls.Add(filterLabel);
+        captureButtonsPanel.Controls.Add(captureFilterComboBox);
         captureButtonsPanel.Controls.Add(captureCountLabel);
         captureButtonsPanel.Dock = DockStyle.Bottom;
         captureButtonsPanel.FlowDirection = FlowDirection.LeftToRight;
         captureButtonsPanel.Height = 38;
         captureButtonsPanel.Name = "captureButtonsPanel";
         captureButtonsPanel.Padding = new Padding(0, 6, 0, 0);
+        // 
+        // clearCaptureButton
+        // 
         clearCaptureButton.AutoSize = true;
         clearCaptureButton.Name = "clearCaptureButton";
         clearCaptureButton.Text = "Clear";
         clearCaptureButton.Click += ClearCaptureButton_Click;
+        // 
+        // saveCaptureButton
+        // 
         saveCaptureButton.AutoSize = true;
         saveCaptureButton.Name = "saveCaptureButton";
         saveCaptureButton.Text = "Save Capture";
         saveCaptureButton.Click += SaveCaptureButton_Click;
+        // 
+        // copyHexButton
+        // 
+        copyHexButton.AutoSize = true;
+        copyHexButton.Name = "copyHexButton";
+        copyHexButton.Text = "Copy Hex";
+        copyHexButton.Click += CopyHexButton_Click;
+        // 
+        // filterLabel
+        // 
+        filterLabel.AutoSize = true;
+        filterLabel.Margin = new Padding(18, 7, 3, 0);
+        filterLabel.Name = "filterLabel";
+        filterLabel.Text = "Show:";
+        // 
+        // captureFilterComboBox
+        // 
+        captureFilterComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        captureFilterComboBox.FormattingEnabled = true;
+        captureFilterComboBox.Items.AddRange(new object[] { "All", "RX", "TX" });
+        captureFilterComboBox.Name = "captureFilterComboBox";
+        captureFilterComboBox.Size = new Size(75, 23);
+        captureFilterComboBox.SelectedIndex = 0;
+        captureFilterComboBox.SelectedIndexChanged += CaptureFilterComboBox_SelectedIndexChanged;
+        // 
+        // captureCountLabel
+        // 
         captureCountLabel.AutoSize = true;
         captureCountLabel.Margin = new Padding(16, 7, 3, 0);
         captureCountLabel.Name = "captureCountLabel";
-        captureCountLabel.Text = "Capture entries: 0";
+        captureCountLabel.Text = "Shown: 0 / Total: 0";
         // 
         // statusLabel
         // 
