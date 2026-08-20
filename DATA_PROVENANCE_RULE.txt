@@ -1,0 +1,14 @@
+CCF Editor data provenance rule
+
+Visible CCF data must come from the file explicitly opened by the user.
+
+Current visible tabs:
+- Records: parsed from the opened CCF record bytes only.
+- Header: RawHex and Decoded values are calculated from the opened CCF bytes only.
+  The Meaning column is schema metadata describing known offsets; it is not a value taken from another file.
+- Hex: exact bytes from the opened CCF only.
+- Validation: checks calculated from the opened CCF only.
+
+No J1 spreadsheet, TSV, Class 171 mapping table, sample data, fallback records, or demo configuration is bundled or auto-loaded.
+
+External engineering mappings may be added later only through an explicit user import/load action and must be clearly identified as an external source, never as CCF content.

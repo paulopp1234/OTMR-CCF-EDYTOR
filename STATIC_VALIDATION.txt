@@ -1,0 +1,16 @@
+CCF Editor / Creator - WinForms .NET 8 source validation
+
+Source checks performed in the generation environment:
+- all .csproj files parse as XML
+- solution project paths resolve
+- project references resolve
+- no .xaml files are used
+- WinForms project targets net8.0-windows with UseWindowsForms=true
+- conventional MainForm.cs / MainForm.Designer.cs / MainForm.resx structure is present
+- Save As writes the working byte buffer directly
+- startup gate is checked before MainForm is constructed
+
+The real CLASS171_v12.ccf engineering fixture is intentionally not committed to this source repository. Synthetic parser/save tests are included.
+
+Runtime build limitation:
+The generation environment did not have a usable .NET 8 Windows build toolchain, so this repository should be built and tested on the Windows Visual Studio/.NET 8 machine with BUILD_AND_TEST.cmd.

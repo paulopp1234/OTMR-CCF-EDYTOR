@@ -1,0 +1,36 @@
+CCF Editor per-application remote startup gate
+
+Control URL:
+https://raw.githubusercontent.com/paulopp1234/CL380_App_Control/main/status.txt
+
+This application ignores the CL380 control line.
+It checks only the line beginning:
+OTMR CCF EDYTOR - 
+
+Allowed line:
+OTMR CCF EDYTOR - ALLOW_START
+
+Blocked line:
+OTMR CCF EDYTOR - DO_NOT_START
+
+Startup order in source:
+1. StartupGate.Check()
+2. Download status.txt with no-cache headers
+3. Locate exactly one OTMR CCF EDYTOR control line
+4. If its status is not exactly ALLOW_START: show blocked message and return
+5. ApplicationConfiguration.Initialize()
+6. new MainForm()
+
+Fail-closed conditions:
+- OTMR CCF EDYTOR - DO_NOT_START
+- OTMR CCF EDYTOR line missing
+- duplicate OTMR CCF EDYTOR lines
+- empty value
+- unknown value
+- HTTP failure
+- network failure
+- timeout
+- GitHub unavailable
+
+No local allow fallback exists.
+The first/general CL380 ALLOW_START or DO_NOT_START line does not control this app.
