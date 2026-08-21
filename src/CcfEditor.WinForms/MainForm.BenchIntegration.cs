@@ -9,4 +9,7 @@ public partial class MainForm
 
     internal void ReportOtmrLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame) =>
         otmrBenchControl.ReportRawLiveFrame(timestamp, frame);
+
+    internal void ReportOtmrLiveState(OtmrLiveState state) =>
+        otmrBenchControl.SetOtmrLiveState(state);
 }

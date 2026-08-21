@@ -9,7 +9,12 @@ public partial class OtmrLiveControl : UserControl
     private readonly SerialOtmrTransport _transport;
     private readonly OtmrLiveService _liveService;
     private bool _closing;
+    private bool _busy;
+    private CancellationTokenSource? _startCancellation;
+    private string? _connectedPortName;
     private int _assembledFrameCount;
+
+    internal OtmrLiveState State => _liveService.State;
 
     public OtmrLiveControl()
     {
@@ -21,9 +26,10 @@ public partial class OtmrLiveControl : UserControl
         _liveService.FrameReceived += LiveService_FrameReceived;
         _liveService.ConnectionChanged += LiveService_ConnectionChanged;
         _liveService.ErrorOccurred += LiveService_ErrorOccurred;
+        _liveService.StateChanged += LiveService_StateChanged;
 
         RefreshPorts();
-        UpdateConnectionUi(false, null);
+        UpdateStateUi();
         RefreshCaptureGrid();
     }
 
@@ -72,13 +78,50 @@ public partial class OtmrLiveControl : UserControl
         SetBusy(true);
         try
         {
-            OtmrSerialSettings settings = OtmrSerialSettings.Class171Bench(portName);
+            OtmrSerialSettings settings = OtmrSerialSettings.Class171Bench(portName, dtrHigh: false);
             await _liveService.ConnectAsync(settings);
         }
         catch (Exception ex)
         {
-            UpdateConnectionUi(false, null);
+            UpdateStateUi();
             MessageBox.Show(this, ex.Message, "Unable to connect OTMR serial port", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void StartLiveButton_Click(object? sender, EventArgs e)
+    {
+        const string confirmation =
+            "Start the Class 171 OTMR real-time output sequence?\r\n\r\n" +
+            "This uses the observed Arrowvale live-start sequence.\r\n" +
+            "No CCF/configuration blocks will be transmitted.";
+        if (MessageBox.Show(
+                this,
+                confirmation,
+                "Start OTMR Live — evidence-backed candidate",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
+
+        _startCancellation?.Dispose();
+        _startCancellation = new CancellationTokenSource();
+        SetBusy(true);
+        try
+        {
+            await _liveService.StartLiveAsync(_startCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            statusLabel.Text = "OTMR live-start sequence cancelled; disconnecting.";
+        }
+        catch (Exception ex)
+        {
+            statusLabel.Text = $"Live start failed: {ex.Message}";
+            MessageBox.Show(this, ex.Message, "Unable to start OTMR live output", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -88,6 +131,7 @@ public partial class OtmrLiveControl : UserControl
 
     private async void DisconnectButton_Click(object? sender, EventArgs e)
     {
+        _startCancellation?.Cancel();
         SetBusy(true);
         try
         {
@@ -209,7 +253,28 @@ public partial class OtmrLiveControl : UserControl
         if (_closing || IsDisposed)
             return;
 
-        void Update() => UpdateConnectionUi(e.IsConnected, e.PortName);
+        void Update()
+        {
+            _connectedPortName = e.IsConnected ? e.PortName : null;
+            UpdateStateUi();
+        }
+        if (InvokeRequired)
+            BeginInvoke((Action)Update);
+        else
+            Update();
+    }
+
+    private void LiveService_StateChanged(object? sender, OtmrLiveStateChangedEventArgs e)
+    {
+        if (_closing || IsDisposed)
+            return;
+
+        void Update()
+        {
+            UpdateStateUi();
+            (FindForm() as MainForm)?.ReportOtmrLiveState(e.State);
+        }
+
         if (InvokeRequired)
             BeginInvoke((Action)Update);
         else
@@ -299,30 +364,51 @@ public partial class OtmrLiveControl : UserControl
     private void UpdateCaptureCount(int total) =>
         captureCountLabel.Text = $"Shown: {captureGrid.Rows.Count} / Total: {total}";
 
-    private void UpdateConnectionUi(bool connected, string? portName)
+    private void UpdateStateUi()
     {
-        connectButton.Enabled = !connected;
-        disconnectButton.Enabled = connected;
-        portComboBox.Enabled = !connected;
-        refreshPortsButton.Enabled = !connected;
-        statusLabel.Text = connected
-            ? $"Connected to {portName} at 38400 / 8 / None / 1. No protocol commands are sent in Milestone 1."
-            : "Disconnected. Milestone 1 is transport/capture only; no protocol commands are transmitted.";
+        OtmrLiveState state = _liveService.State;
+        bool disconnected = state == OtmrLiveState.Disconnected;
+        bool hasPort = portComboBox.SelectedItem is string;
+        connectButton.Enabled = !_busy && disconnected && hasPort;
+        startLiveButton.Enabled = !_busy && state == OtmrLiveState.ConnectedIdle;
+        disconnectButton.Enabled = state != OtmrLiveState.Disconnected;
+        portComboBox.Enabled = !_busy && disconnected;
+        refreshPortsButton.Enabled = !_busy && disconnected;
+
+        (string text, Color color) = state switch
+        {
+            OtmrLiveState.Disconnected => ("DISCONNECTED", Color.DimGray),
+            OtmrLiveState.ConnectedIdle => ("CONNECTED — IDLE (NO LIVE STREAM)", Color.DarkOrange),
+            OtmrLiveState.QuerySent => ("QUERY SENT — WAITING FOR OTMR REPLY", Color.DarkOrange),
+            OtmrLiveState.OtmrReplied => ("OTMR REPLIED", Color.DarkGreen),
+            OtmrLiveState.StartingLive => ("STARTING LIVE — CANDIDATE COMMAND SENT", Color.DarkOrange),
+            OtmrLiveState.WaitingForLiveFrames => ("WAITING FOR FB FB … FF LIVE FRAMES", Color.DarkOrange),
+            OtmrLiveState.LiveActive => ("LIVE STREAM ACTIVE", Color.DarkGreen),
+            OtmrLiveState.Error => ("ERROR — LIVE STREAM NOT ACTIVE", Color.DarkRed),
+            _ => (state.ToString(), SystemColors.ControlText)
+        };
+        liveStateLabel.Text = text;
+        liveStateLabel.ForeColor = color;
+
+        string port = _connectedPortName ?? portComboBox.SelectedItem as string ?? "selected COM";
+        statusLabel.Text = state switch
+        {
+            OtmrLiveState.Disconnected => "Disconnected. Connect opens 38400/8/N/1 with RTS LOW and DTR LOW; it sends nothing.",
+            OtmrLiveState.ConnectedIdle => $"{port} open at 38400/8/N/1, RTS LOW, DTR LOW. Click Start OTMR Live to send the controlled sequence.",
+            OtmrLiveState.QuerySent => "Proven 01 01 query transmitted; waiting for the expected OTMR reply.",
+            OtmrLiveState.OtmrReplied => "OTMR REPLIED. Proceeding with the confirmed operator-requested candidate live-start operation.",
+            OtmrLiveState.StartingLive => "Candidate 01 07 live-start frame transmitted; performing the observed controlled close/reopen.",
+            OtmrLiveState.WaitingForLiveFrames => $"{port} reopened at 38400/8/N/1, RTS LOW, DTR HIGH; waiting for a complete FB FB … FF frame.",
+            OtmrLiveState.LiveActive => "LIVE STREAM ACTIVE — complete FB FB … FF traffic detected. Raw frames only; meanings are not inferred.",
+            OtmrLiveState.Error => "Live-start error. No CCF or configuration block was transmitted. Stop / Disconnect before retrying.",
+            _ => state.ToString()
+        };
     }
 
     private void SetBusy(bool busy)
     {
-        if (busy)
-        {
-            connectButton.Enabled = false;
-            disconnectButton.Enabled = false;
-            refreshPortsButton.Enabled = false;
-            portComboBox.Enabled = false;
-        }
-        else
-        {
-            UpdateConnectionUi(_liveService.IsConnected, portComboBox.SelectedItem as string);
-        }
+        _busy = busy;
+        UpdateStateUi();
     }
 
     protected override void OnHandleDestroyed(EventArgs e)
@@ -332,6 +418,9 @@ public partial class OtmrLiveControl : UserControl
         _liveService.FrameReceived -= LiveService_FrameReceived;
         _liveService.ConnectionChanged -= LiveService_ConnectionChanged;
         _liveService.ErrorOccurred -= LiveService_ErrorOccurred;
+        _liveService.StateChanged -= LiveService_StateChanged;
+        _startCancellation?.Cancel();
+        _startCancellation?.Dispose();
         _liveService.Dispose();
         base.OnHandleDestroyed(e);
     }

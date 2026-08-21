@@ -18,6 +18,7 @@ public partial class OtmrBenchControl : UserControl
     private bool _renderingGrid;
     private bool _updatingConnectorChoices;
     private bool _initialSplitterPositionApplied;
+    private OtmrLiveState _otmrLiveState = OtmrLiveState.Disconnected;
     private string? _lastAssignedConnector;
     private string? _pendingConnectorEdit;
     private ComboBox? _activeConnectorEditingControl;
@@ -79,6 +80,22 @@ public partial class OtmrBenchControl : UserControl
         RenderTable();
     }
 
+    internal void SetOtmrLiveState(OtmrLiveState state)
+    {
+        if (_closing || IsDisposed)
+            return;
+        if (InvokeRequired)
+        {
+            BeginInvoke((Action)(() => SetOtmrLiveState(state)));
+            return;
+        }
+
+        _otmrLiveState = state;
+        UpdateCommandAvailability();
+        if (state != OtmrLiveState.LiveActive && _captureCoordinator.IsCapturing)
+            statusLabel.Text = "OTMR live stream is no longer active. No further RCM frames will be accepted.";
+    }
+
     public void ReportRawLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -91,7 +108,7 @@ public partial class OtmrBenchControl : UserControl
             return;
         }
 
-        if (!_captureCoordinator.AddFrame(timestamp, frame))
+        if (_otmrLiveState != OtmrLiveState.LiveActive || !_captureCoordinator.AddFrame(timestamp, frame))
             return;
 
         UpdateCaptureStatusOnly();
@@ -480,6 +497,17 @@ public partial class OtmrBenchControl : UserControl
 
     private void BeginCapture(RcmElectricalTestState state)
     {
+        if (_otmrLiveState != OtmrLiveState.LiveActive)
+        {
+            MessageBox.Show(
+                this,
+                "OTMR live stream is not active. Connect and Start OTMR Live first.",
+                "OTMR live stream required",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
         RcmPinProfile? pin = SelectedProfilePin();
         if (pin is null)
             return;
@@ -898,7 +926,8 @@ public partial class OtmrBenchControl : UserControl
     {
         bool capturing = _captureCoordinator.IsCapturing;
         RcmPinProfile? pin = SelectedProfilePin();
-        bool canCapture = _rcmProfile is not null && pin?.PhysicalMappingAssigned == true && pin.Testable && !capturing;
+        bool canCapture = _rcmProfile is not null && pin?.PhysicalMappingAssigned == true && pin.Testable &&
+                          _otmrLiveState == OtmrLiveState.LiveActive && !capturing;
         createRcmProfileButton.Enabled = _document is not null && !capturing;
         openRcmProfileButton.Enabled = !capturing;
         saveRcmProfileButton.Enabled = _rcmProfile is not null && !capturing;

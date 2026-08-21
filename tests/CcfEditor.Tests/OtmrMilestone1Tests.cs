@@ -16,6 +16,116 @@ public sealed class OtmrMilestone1Tests
         Assert.Equal(8, settings.DataBits);
         Assert.Equal(System.IO.Ports.Parity.None, settings.Parity);
         Assert.Equal(System.IO.Ports.StopBits.One, settings.StopBits);
+        Assert.False(settings.RtsEnable);
+        Assert.False(settings.DtrEnable);
+    }
+
+    [Fact]
+    public async Task ConnectOpensIdleWithRtsAndDtrLowAndSendsNothing()
+    {
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(transport);
+
+        await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7", dtrHigh: true) with { RtsEnable = true });
+
+        Assert.Equal(OtmrLiveState.ConnectedIdle, service.State);
+        Assert.False(service.IsLiveActive);
+        OtmrSerialSettings settings = Assert.Single(transport.ConnectionSettings);
+        Assert.False(settings.RtsEnable);
+        Assert.False(settings.DtrEnable);
+        Assert.Empty(transport.Transmissions);
+        Assert.Empty(service.GetCaptureSnapshot());
+
+        transport.EmitRx(new byte[] { 0xFB, 0xFB, 0x12, 0x34, 0xFF });
+        Assert.Equal(OtmrLiveState.ConnectedIdle, service.State);
+        Assert.False(service.IsLiveActive);
+    }
+
+    [Fact]
+    public async Task ExplicitStartUsesProvenQueryThenCandidateAndRequiresCompleteLiveFrame()
+    {
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(transport, FastStartTiming());
+        var states = new List<OtmrLiveState>();
+        service.StateChanged += (_, args) => states.Add(args.State);
+        await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+
+        Task start = service.StartLiveAsync();
+        Assert.Equal(OtmrLiveState.QuerySent, service.State);
+        Assert.Equal(OtmrLiveStartProtocol.ProvenQueryFrame.ToArray(), Assert.Single(transport.Transmissions));
+
+        byte[] reply = OtmrLiveStartProtocol.ExpectedReplyPrefix.ToArray();
+        transport.EmitRx(reply[..5]);
+        Assert.Equal(OtmrLiveState.QuerySent, service.State);
+        transport.EmitRx(reply[5..]);
+        await start;
+
+        Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
+        Assert.False(service.IsLiveActive);
+        Assert.Equal(2, transport.ConnectionSettings.Count);
+        Assert.False(transport.ConnectionSettings[0].RtsEnable);
+        Assert.False(transport.ConnectionSettings[0].DtrEnable);
+        Assert.False(transport.ConnectionSettings[1].RtsEnable);
+        Assert.True(transport.ConnectionSettings[1].DtrEnable);
+        Assert.Equal(new[]
+        {
+            OtmrLiveStartProtocol.ProvenQueryFrame.ToArray(),
+            OtmrLiveStartProtocol.CandidateLiveStartFrame.ToArray()
+        }, transport.Transmissions, ByteArrayComparer.Instance);
+        Assert.Equal(new[] { "CONNECT:DTR=LOW", "TX:01-01", "TX:01-07", "DISCONNECT", "CONNECT:DTR=HIGH" },
+            transport.Operations);
+
+        transport.EmitRx(new byte[] { 0xFB, 0xFB, 0x12, 0x34 });
+        Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
+        transport.EmitRx(new byte[] { 0x56, 0xFF });
+        Assert.Equal(OtmrLiveState.LiveActive, service.State);
+        Assert.True(service.IsLiveActive);
+        Assert.Contains(OtmrLiveState.OtmrReplied, states);
+        Assert.Contains(OtmrLiveState.StartingLive, states);
+        Assert.Contains(OtmrLiveState.WaitingForLiveFrames, states);
+        Assert.Contains(OtmrLiveState.LiveActive, states);
+
+        OtmrCaptureEntry[] tx = service.GetCaptureSnapshot().Where(entry => entry.Direction == OtmrDirection.Tx).ToArray();
+        Assert.Equal(2, tx.Length);
+        Assert.Equal("Proven OTMR interrogation/query frame", tx[0].Interpretation);
+        Assert.Contains("CANDIDATE", tx[1].Interpretation, StringComparison.Ordinal);
+
+        await service.DisconnectAsync();
+        Assert.Equal(OtmrLiveState.Disconnected, service.State);
+        Assert.False(service.IsLiveActive);
+    }
+
+    [Fact]
+    public async Task MissingProvenReplyNeverSendsCandidateOrReopensPort()
+    {
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(
+            transport,
+            FastStartTiming() with { QueryReplyTimeout = TimeSpan.FromMilliseconds(50) });
+        await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+
+        TimeoutException error = await Assert.ThrowsAsync<TimeoutException>(() => service.StartLiveAsync());
+
+        Assert.Contains("candidate live-start frame was not sent", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(OtmrLiveState.Error, service.State);
+        Assert.Single(transport.Transmissions);
+        Assert.Single(transport.ConnectionSettings);
+        Assert.DoesNotContain(transport.Operations, operation => operation == "TX:01-07");
+    }
+
+    [Fact]
+    public async Task ImmediateCompleteFrameDuringDtrHighReopenActivatesLiveState()
+    {
+        using var transport = new FakeTransport { EmitCompleteFrameOnDtrHighConnect = true };
+        using var service = new OtmrLiveService(transport, FastStartTiming());
+        await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+
+        Task start = service.StartLiveAsync();
+        transport.EmitRx(OtmrLiveStartProtocol.ExpectedReplyPrefix.ToArray());
+        await start;
+
+        Assert.Equal(OtmrLiveState.LiveActive, service.State);
+        Assert.True(service.IsLiveActive);
     }
 
     [Fact]
@@ -130,6 +240,10 @@ public sealed class OtmrMilestone1Tests
 
     private sealed class FakeTransport : IOtmrTransport
     {
+        public List<OtmrSerialSettings> ConnectionSettings { get; } = new();
+        public List<byte[]> Transmissions { get; } = new();
+        public List<string> Operations { get; } = new();
+        public bool EmitCompleteFrameOnDtrHighConnect { get; init; }
         public bool IsConnected { get; private set; }
         public event EventHandler<OtmrBytesReceivedEventArgs>? BytesReceived;
         public event EventHandler<OtmrBytesTransmittedEventArgs>? BytesTransmitted;
@@ -142,17 +256,32 @@ public sealed class OtmrMilestone1Tests
         public Task ConnectAsync(OtmrSerialSettings settings, CancellationToken cancellationToken = default)
         {
             IsConnected = true;
+            ConnectionSettings.Add(settings);
+            Operations.Add($"CONNECT:DTR={(settings.DtrEnable ? "HIGH" : "LOW")}");
+            if (settings.DtrEnable && EmitCompleteFrameOnDtrHighConnect)
+                EmitRx(new byte[] { 0xFB, 0xFB, 0x42, 0xFF });
             return Task.CompletedTask;
         }
 
         public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             IsConnected = false;
+            Operations.Add("DISCONNECT");
             return Task.CompletedTask;
         }
 
-        public Task SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException("Milestone 1 test transport does not send protocol commands.");
+        public Task SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+        {
+            byte[] bytes = data.ToArray();
+            Transmissions.Add(bytes);
+            Operations.Add(bytes.AsSpan().SequenceEqual(OtmrLiveStartProtocol.ProvenQueryFrame.Span)
+                ? "TX:01-01"
+                : bytes.AsSpan().SequenceEqual(OtmrLiveStartProtocol.CandidateLiveStartFrame.Span)
+                    ? "TX:01-07"
+                    : "TX:OTHER");
+            BytesTransmitted?.Invoke(this, new OtmrBytesTransmittedEventArgs(bytes));
+            return Task.CompletedTask;
+        }
 
         public void EmitRx(byte[] bytes) =>
             BytesReceived?.Invoke(this, new OtmrBytesReceivedEventArgs(bytes));
@@ -163,5 +292,18 @@ public sealed class OtmrMilestone1Tests
         public void Dispose()
         {
         }
+    }
+
+    private static OtmrLiveStartTiming FastStartTiming() => new(
+        TimeSpan.FromSeconds(1),
+        TimeSpan.Zero,
+        TimeSpan.Zero,
+        TimeSpan.Zero);
+
+    private sealed class ByteArrayComparer : IEqualityComparer<byte[]>
+    {
+        public static ByteArrayComparer Instance { get; } = new();
+        public bool Equals(byte[]? x, byte[]? y) => x is not null && y is not null && x.AsSpan().SequenceEqual(y);
+        public int GetHashCode(byte[] obj) => obj.Aggregate(17, (hash, value) => hash * 31 + value);
     }
 }

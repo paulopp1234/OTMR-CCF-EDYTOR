@@ -1,5 +1,6 @@
 using System.Reflection;
 using CcfEditor.Core;
+using CcfEditor.Otmr.Live;
 using CcfEditor.Otmr.Rcm;
 using CcfEditor.WinForms;
 
@@ -140,7 +141,7 @@ public sealed class MainFormLayoutTests
                     "Header - edit supported Decoded cells",
                     "Hex",
                     "Validation",
-                    "OTMR Live - M1",
+                    "OTMR Live",
                     "OTMR I/O Bench"
                 }, tabs.TabPages.Cast<TabPage>().Select(page => page.Text));
 
@@ -162,8 +163,10 @@ public sealed class MainFormLayoutTests
                 tabs.SelectedIndex = 4;
                 Application.DoEvents();
                 foreach (string text in new[]
-                         { "Refresh Ports", "38400", "8", "None", "1", "Connect", "Disconnect", "Clear", "Save Capture", "Copy Hex" })
+                         { "Refresh Ports", "38400", "8", "None", "1", "Connect", "Start OTMR Live", "Stop / Disconnect", "Clear", "Save Capture", "Copy Hex" })
                     AssertVisibleText(tabs.SelectedTab!, text);
+                Assert.Equal("DISCONNECTED", Find<Label>(form, "liveStateLabel").Text);
+                Assert.False(Find<Button>(form, "startLiveButton").Enabled);
 
                 tabs.SelectedIndex = 5;
                 Application.DoEvents();
@@ -243,6 +246,18 @@ public sealed class MainFormLayoutTests
             Assert.Contains("J1-A", selected.Text, StringComparison.Ordinal);
             Assert.Contains("Throttle 1", selected.Text, StringComparison.Ordinal);
             Assert.Contains("Expected CCF records: 0", selected.Text, StringComparison.Ordinal);
+            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.ConnectedIdle);
+            Application.DoEvents();
+            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.WaitingForLiveFrames);
+            Application.DoEvents();
+            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.LiveActive);
+            Application.DoEvents();
             Assert.True(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
             Assert.True(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
             Assert.False(Find<Button>(form, "compareStatesButton").Enabled);

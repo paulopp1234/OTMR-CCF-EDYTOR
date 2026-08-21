@@ -7,10 +7,12 @@ public sealed record OtmrSerialSettings(
     int BaudRate,
     int DataBits,
     Parity Parity,
-    StopBits StopBits)
+    StopBits StopBits,
+    bool RtsEnable = false,
+    bool DtrEnable = false)
 {
-    public static OtmrSerialSettings Class171Bench(string portName) =>
-        new(portName, 38400, 8, Parity.None, StopBits.One);
+    public static OtmrSerialSettings Class171Bench(string portName, bool dtrHigh = false) =>
+        new(portName, 38400, 8, Parity.None, StopBits.One, RtsEnable: false, DtrEnable: dtrHigh);
 
     public void Validate()
     {

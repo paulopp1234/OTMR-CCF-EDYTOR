@@ -20,7 +20,9 @@ partial class OtmrLiveControl
     private Label stopBitsLabel = null!;
     private TextBox stopBitsTextBox = null!;
     private Button connectButton = null!;
+    private Button startLiveButton = null!;
     private Button disconnectButton = null!;
+    private Label liveStateLabel = null!;
     private Label safetyLabel = null!;
     private GroupBox captureGroupBox = null!;
     private DataGridView captureGrid = null!;
@@ -62,7 +64,9 @@ partial class OtmrLiveControl
         stopBitsLabel = new Label();
         stopBitsTextBox = new TextBox();
         connectButton = new Button();
+        startLiveButton = new Button();
         disconnectButton = new Button();
+        liveStateLabel = new Label();
         safetyLabel = new Label();
         captureGroupBox = new GroupBox();
         captureGrid = new DataGridView();
@@ -98,7 +102,7 @@ partial class OtmrLiveControl
         rootLayout.Name = "rootLayout";
         rootLayout.Padding = new Padding(8);
         rootLayout.RowCount = 3;
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 150F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 170F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
         rootLayout.Size = new Size(1200, 700);
@@ -108,11 +112,11 @@ partial class OtmrLiveControl
         connectionGroupBox.Controls.Add(connectionLayout);
         connectionGroupBox.Dock = DockStyle.Fill;
         connectionGroupBox.Name = "connectionGroupBox";
-        connectionGroupBox.Text = "OTMR serial connection - READ / LIVE transport only";
+        connectionGroupBox.Text = "Class 171 OTMR live-start control";
         // 
         // connectionLayout
         // 
-        connectionLayout.ColumnCount = 9;
+        connectionLayout.ColumnCount = 10;
         connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80F));
         connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130F));
         connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90F));
@@ -120,7 +124,8 @@ partial class OtmrLiveControl
         connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80F));
         connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80F));
         connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80F));
-        connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110F));
+        connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125F));
+        connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 155F));
         connectionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         connectionLayout.Controls.Add(portLabel, 0, 0);
         connectionLayout.Controls.Add(portComboBox, 1, 0);
@@ -134,6 +139,8 @@ partial class OtmrLiveControl
         connectionLayout.Controls.Add(stopBitsLabel, 5, 1);
         connectionLayout.Controls.Add(stopBitsTextBox, 6, 1);
         connectionLayout.Controls.Add(connectButton, 7, 0);
+        connectionLayout.Controls.Add(startLiveButton, 8, 0);
+        connectionLayout.Controls.Add(liveStateLabel, 0, 1);
         connectionLayout.Controls.Add(disconnectButton, 7, 1);
         connectionLayout.Controls.Add(safetyLabel, 0, 2);
         connectionLayout.Dock = DockStyle.Fill;
@@ -184,16 +191,29 @@ partial class OtmrLiveControl
         connectButton.Name = "connectButton";
         connectButton.Text = "Connect";
         connectButton.Click += ConnectButton_Click;
+        startLiveButton.Dock = DockStyle.Fill;
+        startLiveButton.Enabled = false;
+        startLiveButton.Name = "startLiveButton";
+        startLiveButton.Text = "Start OTMR Live";
+        startLiveButton.Click += StartLiveButton_Click;
+        liveStateLabel.AutoSize = true;
+        connectionLayout.SetColumnSpan(liveStateLabel, 3);
+        liveStateLabel.Dock = DockStyle.Fill;
+        liveStateLabel.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+        liveStateLabel.Name = "liveStateLabel";
+        liveStateLabel.Text = "DISCONNECTED";
+        liveStateLabel.TextAlign = ContentAlignment.MiddleLeft;
         disconnectButton.Dock = DockStyle.Fill;
         disconnectButton.Enabled = false;
         disconnectButton.Name = "disconnectButton";
-        disconnectButton.Text = "Disconnect";
+        connectionLayout.SetColumnSpan(disconnectButton, 2);
+        disconnectButton.Text = "Stop / Disconnect";
         disconnectButton.Click += DisconnectButton_Click;
         safetyLabel.AutoSize = true;
-        connectionLayout.SetColumnSpan(safetyLabel, 9);
+        connectionLayout.SetColumnSpan(safetyLabel, 10);
         safetyLabel.Dock = DockStyle.Fill;
         safetyLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        safetyLabel.Text = "MILESTONE 1 SAFETY: connection and raw capture only. No startup sequence, identity request, live-start command, raw TX tool, replay, programming or unknown protocol command is sent automatically.";
+        safetyLabel.Text = "SAFETY: Connect sends nothing. Start OTMR Live is an explicit confirmed action using the proven 01 01 query and evidence-backed CANDIDATE 01 07 Arrowvale sequence. No CCF, captured 0x10B configuration block, programming data, replay, or unknown command is transmitted.";
         safetyLabel.TextAlign = ContentAlignment.MiddleLeft;
         // 
         // captureGroupBox

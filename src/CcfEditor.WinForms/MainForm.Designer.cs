@@ -459,7 +459,7 @@ partial class MainForm
         otmrLiveTab.Padding = new Padding(3);
         otmrLiveTab.Size = new Size(1492, 801);
         otmrLiveTab.TabIndex = 4;
-        otmrLiveTab.Text = "OTMR Live - M1";
+        otmrLiveTab.Text = "OTMR Live";
         otmrLiveTab.UseVisualStyleBackColor = true;
         otmrLiveControl.Dock = DockStyle.Fill;
         otmrLiveControl.Location = new Point(3, 3);

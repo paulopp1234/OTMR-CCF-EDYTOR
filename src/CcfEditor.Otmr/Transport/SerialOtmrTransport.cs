@@ -39,8 +39,8 @@ public sealed class SerialOtmrTransport : IOtmrTransport
             var port = new SerialPort(settings.PortName, settings.BaudRate, settings.Parity, settings.DataBits, settings.StopBits)
             {
                 Handshake = Handshake.None,
-                DtrEnable = false,
-                RtsEnable = false,
+                DtrEnable = settings.DtrEnable,
+                RtsEnable = settings.RtsEnable,
                 ReadTimeout = 1000,
                 WriteTimeout = 1000
             };
