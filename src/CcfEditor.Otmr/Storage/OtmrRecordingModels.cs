@@ -47,6 +47,48 @@ public sealed record OtmrPendingUpload(
     int AttemptCount,
     string? LastError);
 
+public sealed record OtmrUploadSessionMetadata(
+    Guid SessionId,
+    DateTimeOffset StartedUtc,
+    DateTimeOffset? FinishedUtc,
+    string SoftwareVersion,
+    string ComPort,
+    string SerialSettings,
+    string? VehicleIdentifier,
+    string? VehicleType,
+    string? CcfFilename,
+    string? CcfSha256,
+    string? RcmProfileFilename,
+    string? RcmProfileSha256,
+    string? RcmProfileJsonSnapshot,
+    string SyncState);
+
+public sealed record OtmrUploadRawEntry(
+    long Sequence,
+    DateTimeOffset TimestampUtc,
+    string Direction,
+    byte[] Data,
+    string? Interpretation);
+
+public sealed record OtmrUploadLiveFrame(
+    long Sequence,
+    DateTimeOffset TimestampUtc,
+    byte[] Data,
+    string DecodeStatus,
+    string? DecoderVersion);
+
+/// <summary>
+/// Complete local session payload prepared for the future HTTPS uploader.
+/// Raw serial and live-frame collections can be split into batches using
+/// OtmrServerSyncContract.RecommendedBatchSize before transmission.
+/// RcmPayloadJson contains the structured RCM input/capture/comparison rows.
+/// </summary>
+public sealed record OtmrSessionUploadPackage(
+    OtmrUploadSessionMetadata Session,
+    IReadOnlyList<OtmrUploadRawEntry> RawEntries,
+    IReadOnlyList<OtmrUploadLiveFrame> LiveFrames,
+    string RcmPayloadJson);
+
 public static class OtmrDatabasePaths
 {
     public const string DefaultRootDirectory = @"C:\OTMR_RCM";
@@ -81,6 +123,8 @@ public interface IOtmrRecordingStore : IAsyncDisposable
 
     event EventHandler<OtmrRecordingStatusChangedEventArgs>? StatusChanged;
 
+    Task InitializeAsync(CancellationToken cancellationToken = default);
+
     Task<Guid> StartSessionAsync(
         OtmrRecordingSessionContext context,
         CancellationToken cancellationToken = default);
@@ -96,6 +140,10 @@ public interface IOtmrRecordingStore : IAsyncDisposable
 
     Task<IReadOnlyList<OtmrPendingUpload>> GetPendingUploadsAsync(
         int maximum = 100,
+        CancellationToken cancellationToken = default);
+
+    Task<OtmrSessionUploadPackage> BuildUploadPackageAsync(
+        Guid sessionId,
         CancellationToken cancellationToken = default);
 
     Task MarkUploadSucceededAsync(
