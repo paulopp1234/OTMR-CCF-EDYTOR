@@ -10,6 +10,12 @@ public partial class MainForm
     protected override async void OnShown(EventArgs e)
     {
         base.OnShown(e);
+
+        // The bench OnLoad event can run while the form is still receiving its
+        // final dimensions. Correct its intended initial split once now that the
+        // host form is actually shown.
+        otmrBenchControl.ApplyFinalInitialLayout();
+
         if (_recordingStore is not null)
             return;
 
