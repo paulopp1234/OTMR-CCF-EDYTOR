@@ -261,15 +261,20 @@ partial class MainForm
         tabs.Size = new Size(1500, 829);
 
         recordsTab.Controls.Add(recordsSplit);
+        recordsTab.Location = new Point(4, 24);
         recordsTab.Name = "recordsTab";
         recordsTab.Padding = new Padding(3);
+        recordsTab.Size = new Size(1492, 801);
+        recordsTab.TabIndex = 0;
         recordsTab.Text = "Records - edit known fields in grid";
         recordsTab.UseVisualStyleBackColor = true;
         recordsSplit.Dock = DockStyle.Fill;
+        recordsSplit.Location = new Point(3, 3);
         recordsSplit.Name = "recordsSplit";
         recordsSplit.Orientation = Orientation.Horizontal;
         recordsSplit.Panel1.Controls.Add(recordsTopTable);
         recordsSplit.Panel2.Controls.Add(detailsTable);
+        recordsSplit.Size = new Size(1486, 795);
         recordsSplit.SplitterDistance = 520;
         recordsTopTable.ColumnCount = 2;
         recordsTopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
@@ -374,8 +379,11 @@ partial class MainForm
         detailRawTextBox.Dock = DockStyle.Fill; detailRawTextBox.Font = new Font("Consolas", 9F); detailRawTextBox.ReadOnly = true; detailRawTextBox.WordWrap = false;
 
         headerTab.Controls.Add(headerGrid);
+        headerTab.Location = new Point(4, 24);
         headerTab.Name = "headerTab";
         headerTab.Padding = new Padding(3);
+        headerTab.Size = new Size(1492, 801);
+        headerTab.TabIndex = 1;
         headerTab.Text = "Header - edit supported Decoded cells";
         headerTab.UseVisualStyleBackColor = true;
         headerGrid.AllowUserToAddRows = false;
@@ -384,9 +392,11 @@ partial class MainForm
         headerGrid.BackgroundColor = SystemColors.Window;
         headerGrid.Columns.AddRange(new DataGridViewColumn[] { headerOffsetColumn, headerMeaningColumn, headerRawHexColumn, headerDecodedColumn, headerEditableColumn });
         headerGrid.Dock = DockStyle.Fill;
+        headerGrid.Location = new Point(3, 3);
         headerGrid.Name = "headerGrid";
         headerGrid.RowHeadersVisible = false;
         headerGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        headerGrid.Size = new Size(1486, 795);
         headerGrid.CellBeginEdit += HeaderGrid_CellBeginEdit;
         headerGrid.CellEndEdit += HeaderGrid_CellEndEdit;
         headerGrid.CellValidating += HeaderGrid_CellValidating;
@@ -398,8 +408,11 @@ partial class MainForm
         headerEditableColumn.DataPropertyName = "Editable"; headerEditableColumn.HeaderText = "Editable"; headerEditableColumn.Name = "headerEditableColumn"; headerEditableColumn.ReadOnly = true; headerEditableColumn.Width = 65;
 
         hexTab.Controls.Add(hexGrid);
+        hexTab.Location = new Point(4, 24);
         hexTab.Name = "hexTab";
         hexTab.Padding = new Padding(3);
+        hexTab.Size = new Size(1492, 801);
+        hexTab.TabIndex = 2;
         hexTab.Text = "Hex";
         hexTab.UseVisualStyleBackColor = true;
         hexGrid.AllowUserToAddRows = false;
@@ -409,45 +422,60 @@ partial class MainForm
         hexGrid.Columns.AddRange(new DataGridViewColumn[] { hexOffsetColumn, hexBytesColumn, hexAsciiColumn });
         hexGrid.Dock = DockStyle.Fill;
         hexGrid.Font = new Font("Consolas", 9F);
+        hexGrid.Location = new Point(3, 3);
         hexGrid.Name = "hexGrid";
         hexGrid.ReadOnly = true;
         hexGrid.RowHeadersVisible = false;
         hexGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        hexGrid.Size = new Size(1486, 795);
         hexOffsetColumn.DataPropertyName = "Offset"; hexOffsetColumn.HeaderText = "Offset"; hexOffsetColumn.Name = "hexOffsetColumn"; hexOffsetColumn.ReadOnly = true; hexOffsetColumn.Width = 90;
         hexBytesColumn.DataPropertyName = "Hex"; hexBytesColumn.HeaderText = "Hex bytes"; hexBytesColumn.Name = "hexBytesColumn"; hexBytesColumn.ReadOnly = true; hexBytesColumn.Width = 630;
         hexAsciiColumn.DataPropertyName = "Ascii"; hexAsciiColumn.HeaderText = "ASCII"; hexAsciiColumn.Name = "hexAsciiColumn"; hexAsciiColumn.ReadOnly = true; hexAsciiColumn.Width = 220;
 
         validationTab.Controls.Add(validationList);
+        validationTab.Location = new Point(4, 24);
         validationTab.Name = "validationTab";
         validationTab.Padding = new Padding(3);
+        validationTab.Size = new Size(1492, 801);
+        validationTab.TabIndex = 3;
         validationTab.Text = "Validation";
         validationTab.UseVisualStyleBackColor = true;
         validationList.Columns.AddRange(new ColumnHeader[] { validationSeverityColumn, validationMessageColumn });
         validationList.Dock = DockStyle.Fill;
         validationList.FullRowSelect = true;
         validationList.GridLines = true;
+        validationList.Location = new Point(3, 3);
         validationList.Name = "validationList";
+        validationList.Size = new Size(1486, 795);
         validationList.View = View.Details;
         validationSeverityColumn.Text = "Severity"; validationSeverityColumn.Width = 100;
         validationMessageColumn.Text = "Message"; validationMessageColumn.Width = 1200;
 
         otmrLiveTab.Controls.Add(otmrLiveControl);
+        otmrLiveTab.Location = new Point(4, 24);
         otmrLiveTab.Name = "otmrLiveTab";
         otmrLiveTab.Padding = new Padding(3);
+        otmrLiveTab.Size = new Size(1492, 801);
+        otmrLiveTab.TabIndex = 4;
         otmrLiveTab.Text = "OTMR Live - M1";
         otmrLiveTab.UseVisualStyleBackColor = true;
         otmrLiveControl.Dock = DockStyle.Fill;
         otmrLiveControl.Location = new Point(3, 3);
         otmrLiveControl.Name = "otmrLiveControl";
+        otmrLiveControl.Size = new Size(1486, 795);
 
         otmrBenchTab.Controls.Add(otmrBenchControl);
+        otmrBenchTab.Location = new Point(4, 24);
         otmrBenchTab.Name = "otmrBenchTab";
         otmrBenchTab.Padding = new Padding(3);
+        otmrBenchTab.Size = new Size(1492, 801);
+        otmrBenchTab.TabIndex = 5;
         otmrBenchTab.Text = "OTMR I/O Bench";
         otmrBenchTab.UseVisualStyleBackColor = true;
         otmrBenchControl.Dock = DockStyle.Fill;
         otmrBenchControl.Location = new Point(3, 3);
         otmrBenchControl.Name = "otmrBenchControl";
+        otmrBenchControl.Size = new Size(1486, 795);
 
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
@@ -466,20 +494,20 @@ partial class MainForm
         menuStrip.ResumeLayout(false); menuStrip.PerformLayout();
         toolStrip.ResumeLayout(false); toolStrip.PerformLayout();
         statusStrip.ResumeLayout(false); statusStrip.PerformLayout();
-        tabs.ResumeLayout(false);
-        recordsTab.ResumeLayout(false);
+        recordsTab.ResumeLayout(true);
         recordsSplit.Panel1.ResumeLayout(false); recordsSplit.Panel2.ResumeLayout(false);
-        ((System.ComponentModel.ISupportInitialize)recordsSplit).EndInit(); recordsSplit.ResumeLayout(false);
-        recordsTopTable.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)recordsSplit).EndInit(); recordsSplit.ResumeLayout(true);
+        recordsTopTable.ResumeLayout(true);
         ((System.ComponentModel.ISupportInitialize)recordsGrid).EndInit();
         fieldHelpGroupBox.ResumeLayout(false); fieldHelpGroupBox.PerformLayout();
-        detailsTable.ResumeLayout(false); detailsTable.PerformLayout();
-        headerTab.ResumeLayout(false); ((System.ComponentModel.ISupportInitialize)headerGrid).EndInit();
-        hexTab.ResumeLayout(false); ((System.ComponentModel.ISupportInitialize)hexGrid).EndInit();
-        validationTab.ResumeLayout(false);
-        otmrLiveTab.ResumeLayout(false);
-        otmrBenchTab.ResumeLayout(false);
-        ResumeLayout(false);
+        detailsTable.ResumeLayout(true); detailsTable.PerformLayout();
+        headerTab.ResumeLayout(true); ((System.ComponentModel.ISupportInitialize)headerGrid).EndInit();
+        hexTab.ResumeLayout(true); ((System.ComponentModel.ISupportInitialize)hexGrid).EndInit();
+        validationTab.ResumeLayout(true);
+        otmrLiveTab.ResumeLayout(true);
+        otmrBenchTab.ResumeLayout(true);
+        tabs.ResumeLayout(true);
+        ResumeLayout(true);
         PerformLayout();
     }
 }

@@ -38,6 +38,23 @@ public sealed class OtmrMilestone1Tests
     }
 
     [Fact]
+    public void FragmentedTransportReceive_EmitsOneCompleteLiveFrame()
+    {
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(transport);
+        var received = new List<OtmrLiveFrame>();
+        service.FrameReceived += (_, args) => received.Add(args.Frame);
+
+        transport.EmitRx(new byte[] { 0xFB, 0xFB, 0x38, 0x4B });
+        transport.EmitRx(new byte[] { 0x38, 0x4A });
+        transport.EmitRx(new byte[] { 0xFF });
+
+        OtmrLiveFrame frame = Assert.Single(received);
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x38, 0x4B, 0x38, 0x4A, 0xFF }, frame.GetDataSnapshot());
+        Assert.Equal(3, service.GetCaptureSnapshot().Count);
+    }
+
+    [Fact]
     public void TransportTxEvent_IsCapturedByteForByte()
     {
         using var transport = new FakeTransport();
@@ -116,7 +133,11 @@ public sealed class OtmrMilestone1Tests
         public bool IsConnected { get; private set; }
         public event EventHandler<OtmrBytesReceivedEventArgs>? BytesReceived;
         public event EventHandler<OtmrBytesTransmittedEventArgs>? BytesTransmitted;
-        public event EventHandler<OtmrTransportErrorEventArgs>? ErrorOccurred;
+        public event EventHandler<OtmrTransportErrorEventArgs>? ErrorOccurred
+        {
+            add { }
+            remove { }
+        }
 
         public Task ConnectAsync(OtmrSerialSettings settings, CancellationToken cancellationToken = default)
         {

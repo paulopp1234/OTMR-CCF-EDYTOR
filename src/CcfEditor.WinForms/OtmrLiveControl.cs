@@ -9,6 +9,7 @@ public partial class OtmrLiveControl : UserControl
     private readonly SerialOtmrTransport _transport;
     private readonly OtmrLiveService _liveService;
     private bool _closing;
+    private int _assembledFrameCount;
 
     public OtmrLiveControl()
     {
@@ -17,6 +18,7 @@ public partial class OtmrLiveControl : UserControl
         _transport = new SerialOtmrTransport();
         _liveService = new OtmrLiveService(_transport);
         _liveService.CaptureAdded += LiveService_CaptureAdded;
+        _liveService.FrameReceived += LiveService_FrameReceived;
         _liveService.ConnectionChanged += LiveService_ConnectionChanged;
         _liveService.ErrorOccurred += LiveService_ErrorOccurred;
 
@@ -214,6 +216,25 @@ public partial class OtmrLiveControl : UserControl
             Update();
     }
 
+    private void LiveService_FrameReceived(object? sender, OtmrLiveFrameEventArgs e)
+    {
+        if (_closing || IsDisposed)
+            return;
+
+        void ReportFrame()
+        {
+            _assembledFrameCount++;
+            statusLabel.Text =
+                $"Complete RX frame #{_assembledFrameCount}: {e.Frame.Length} bytes | {e.Frame.Hex}";
+            (FindForm() as MainForm)?.ReportOtmrLiveFrame(e.Timestamp, e.Frame);
+        }
+
+        if (InvokeRequired)
+            BeginInvoke((Action)ReportFrame);
+        else
+            ReportFrame();
+    }
+
     private void LiveService_ErrorOccurred(object? sender, OtmrLiveErrorEventArgs e)
     {
         if (_closing || IsDisposed)
@@ -308,6 +329,7 @@ public partial class OtmrLiveControl : UserControl
     {
         _closing = true;
         _liveService.CaptureAdded -= LiveService_CaptureAdded;
+        _liveService.FrameReceived -= LiveService_FrameReceived;
         _liveService.ConnectionChanged -= LiveService_ConnectionChanged;
         _liveService.ErrorOccurred -= LiveService_ErrorOccurred;
         _liveService.Dispose();

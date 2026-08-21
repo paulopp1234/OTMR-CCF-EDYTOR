@@ -12,6 +12,7 @@ partial class OtmrBenchControl
     private Button refreshCcfButton = null!;
     private Button armSelectedButton = null!;
     private Button stopObservationButton = null!;
+    private Button saveObservationButton = null!;
     private Button clearObservationsButton = null!;
     private Label profileStatusLabel = null!;
     private Label ccfStatusLabel = null!;
@@ -55,6 +56,7 @@ partial class OtmrBenchControl
         refreshCcfButton = new Button();
         armSelectedButton = new Button();
         stopObservationButton = new Button();
+        saveObservationButton = new Button();
         clearObservationsButton = new Button();
         profileStatusLabel = new Label();
         ccfStatusLabel = new Label();
@@ -116,6 +118,7 @@ partial class OtmrBenchControl
         commandPanel.Controls.Add(refreshCcfButton);
         commandPanel.Controls.Add(armSelectedButton);
         commandPanel.Controls.Add(stopObservationButton);
+        commandPanel.Controls.Add(saveObservationButton);
         commandPanel.Controls.Add(clearObservationsButton);
         commandPanel.Controls.Add(profileStatusLabel);
         commandPanel.Controls.Add(ccfStatusLabel);
@@ -180,6 +183,15 @@ partial class OtmrBenchControl
         stopObservationButton.Text = "Stop Observation";
         stopObservationButton.Click += StopObservationButton_Click;
         // 
+        // saveObservationButton
+        // 
+        saveObservationButton.AutoSize = true;
+        saveObservationButton.Enabled = false;
+        saveObservationButton.Margin = new Padding(3, 3, 6, 3);
+        saveObservationButton.Name = "saveObservationButton";
+        saveObservationButton.Text = "Save Observation Session...";
+        saveObservationButton.Click += SaveObservationButton_Click;
+        // 
         // clearObservationsButton
         // 
         clearObservationsButton.AutoSize = true;
@@ -226,6 +238,7 @@ partial class OtmrBenchControl
         benchSplit.Name = "benchSplit";
         benchSplit.Panel1.Controls.Add(benchGrid);
         benchSplit.Panel2.Controls.Add(detailsGroupBox);
+        benchSplit.Size = new Size(1428, 584);
         benchSplit.SplitterDistance = 1080;
         // 
         // benchGrid
@@ -295,16 +308,17 @@ partial class OtmrBenchControl
         Controls.Add(rootLayout);
         Name = "OtmrBenchControl";
         Size = new Size(1450, 760);
-        rootLayout.ResumeLayout(false);
-        commandPanel.ResumeLayout(false);
+        commandPanel.ResumeLayout(true);
         commandPanel.PerformLayout();
         benchSplit.Panel1.ResumeLayout(false);
         benchSplit.Panel2.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)benchSplit).EndInit();
-        benchSplit.ResumeLayout(false);
+        benchSplit.ResumeLayout(true);
         ((System.ComponentModel.ISupportInitialize)benchGrid).EndInit();
-        detailsGroupBox.ResumeLayout(false);
+        detailsGroupBox.ResumeLayout(true);
         detailsGroupBox.PerformLayout();
-        ResumeLayout(false);
+        rootLayout.ResumeLayout(true);
+        ResumeLayout(true);
+        PerformLayout();
     }
 }

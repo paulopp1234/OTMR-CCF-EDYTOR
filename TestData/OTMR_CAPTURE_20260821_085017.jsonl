@@ -1,0 +1,135 @@
+{"Timestamp":"2026-08-21T08:48:39.9387683+01:00","Direction":"RX","Hex":"FB FB 38 49","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:39.9691377+01:00","Direction":"RX","Hex":"38 48","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:40.1216996+01:00","Direction":"RX","Hex":"38 49","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:40.1849615+01:00","Direction":"RX","Hex":"38 48","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:40.7533829+01:00","Direction":"RX","Hex":"01 01 00 01 00 00 02 01 02 01 03 01 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:41.1028037+01:00","Direction":"RX","Hex":"01 02 00 01 00 01 01 FF 02 06 00 00 05 C0 56 30 32 2E 30 34 5F 00 30 35 43 30 37 37 00 00 37 39 38 30 34 00 00 00 00 00 31 37 31 38 30 34 00 31 37 31 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 05 96 16 16 16 96 00 00 00 00 04 42 12 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 34 03 34 28 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 20 00 00 00 00 00 00 40 1F 00 00 00 30 30 00 00 00 00 80 00 14 78 02 00 64 07 08 03 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 5E 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:42.1535749+01:00","Direction":"RX","Hex":"01 03 00 01 00 00 02 01 02 03 03 03 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:42.2864075+01:00","Direction":"RX","Hex":"01 04 00 02 00 01 01 FF 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 04 06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 01 06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 02 00 00 00 03 52 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:43.3157053+01:00","Direction":"RX","Hex":"01 05 00 01 00 00 02 01 02 05 03 05 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:43.4663176+01:00","Direction":"RX","Hex":"01 06 00 03 00 01 01 FF 02 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 07 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 13 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 8F 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:44.5174789+01:00","Direction":"RX","Hex":"01 07 00 01 00 00 02 01 02 07 03 07 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:44.6528073+01:00","Direction":"RX","Hex":"01 08 00 04 00 01 01 FF 02 00 00 00 00 00 00 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 12 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 03 02 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 02 00 00 00 00 00 00 01 06 00 00 00 00 00 00 00 00 00 03 8C 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:45.6842254+01:00","Direction":"RX","Hex":"01 09 00 01 00 00 02 01 02 09 03 09 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:45.834268+01:00","Direction":"RX","Hex":"01 0A 00 05 00 01 01 FF 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 00 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:46.9805305+01:00","Direction":"RX","Hex":"01 0B 00 01 00 00 02 01 02 0B 03 0B 04 01 0C 00 06 01 01 01 CA 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 00 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:48.062623+01:00","Direction":"RX","Hex":"01 0D 00 01 00 00 02 01 02 01 03 01 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:48.6979283+01:00","Direction":"RX","Hex":"01 0E 00 01 00 00","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:48.7131069+01:00","Direction":"RX","Hex":"02 01 02 02 03 02 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:49.3149673+01:00","Direction":"RX","Hex":"01 0F 00 01 00 00 02 01 02 03 03 03 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:49.9299907+01:00","Direction":"RX","Hex":"01 10 00 01 00 00 02 01 02 04 03 04 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:50.5463415+01:00","Direction":"RX","Hex":"01 11 00 01 00 00 02 01 02 05 03 05 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:51.1475631+01:00","Direction":"RX","Hex":"01 12 00 01 00 00 02 01 02 06 03 06 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:51.2155538+01:00","Direction":"RX","Hex":"01 13 00 01 01 01 01 01 02 06 03 06 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:48:57.4060267+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:01.7567298+01:00","Direction":"RX","Hex":"FB FB 38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:01.8532168+01:00","Direction":"RX","Hex":"38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:02.0859848+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:02.1716123+01:00","Direction":"RX","Hex":"38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:02.4068865+01:00","Direction":"RX","Hex":"FF D2 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:03.1810494+01:00","Direction":"RX","Hex":"FB FB 38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:03.2693565+01:00","Direction":"RX","Hex":"38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:03.3990381+01:00","Direction":"RX","Hex":"38 4B FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:03.4363514+01:00","Direction":"RX","Hex":"FB FB 38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:03.6897471+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:03.7673699+01:00","Direction":"RX","Hex":"38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:03.9895188+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.0174888+01:00","Direction":"RX","Hex":"38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.0855765+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.1197213+01:00","Direction":"RX","Hex":"38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.3707492+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.3872027+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.4182534+01:00","Direction":"RX","Hex":"FB FB 38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.4519327+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.5840679+01:00","Direction":"RX","Hex":"38 4A","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:04.6167587+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:05.4043048+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:07.5527566+01:00","Direction":"RX","Hex":"FB FB 38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:07.5990215+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:07.7049216+01:00","Direction":"RX","Hex":"38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:07.7987222+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:08.4018041+01:00","Direction":"RX","Hex":"FF D2 02","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:08.5623709+01:00","Direction":"RX","Hex":"FB FB 38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:08.6501649+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:08.883043+01:00","Direction":"RX","Hex":"38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:09.2022399+01:00","Direction":"RX","Hex":"38 4B","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:09.3855986+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:09.4365876+01:00","Direction":"RX","Hex":"FB FB 38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:10.399016+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:20.3446038+01:00","Direction":"RX","Hex":"FB FB 38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:20.3920271+01:00","Direction":"RX","Hex":"FF D2 09 FB FB 38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:20.8891857+01:00","Direction":"RX","Hex":"38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:20.956851+01:00","Direction":"RX","Hex":"38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:21.3916596+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:22.3266879+01:00","Direction":"RX","Hex":"FB FB 38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:22.4088662+01:00","Direction":"RX","Hex":"38 4C FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:22.7387696+01:00","Direction":"RX","Hex":"FB FB 38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:22.8058354+01:00","Direction":"RX","Hex":"38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:23.2248098+01:00","Direction":"RX","Hex":"38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:23.3059537+01:00","Direction":"RX","Hex":"38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:23.4056019+01:00","Direction":"RX","Hex":"38 4D FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:23.4736905+01:00","Direction":"RX","Hex":"FB FB 38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:23.5373294+01:00","Direction":"RX","Hex":"38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:23.7058396+01:00","Direction":"RX","Hex":"38 4C","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:23.7724428+01:00","Direction":"RX","Hex":"38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:24.3912191+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:28.7889117+01:00","Direction":"RX","Hex":"FB FB 38 4E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:28.8379009+01:00","Direction":"RX","Hex":"38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:28.9241538+01:00","Direction":"RX","Hex":"38 4E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:29.0878417+01:00","Direction":"RX","Hex":"38 4D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:29.2050682+01:00","Direction":"RX","Hex":"38 4E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:29.3856907+01:00","Direction":"RX","Hex":"FF D2 04","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:42.8923157+01:00","Direction":"RX","Hex":"FB FB 38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:42.9908138+01:00","Direction":"RX","Hex":"38 4E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:43.3910104+01:00","Direction":"RX","Hex":"FF D2 0D","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:44.5930292+01:00","Direction":"RX","Hex":"FB FB 38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:44.8425698+01:00","Direction":"RX","Hex":"38 4E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:45.0754974+01:00","Direction":"RX","Hex":"38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:45.1030569+01:00","Direction":"RX","Hex":"38 4E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:45.3921412+01:00","Direction":"RX","Hex":"FF D2 01","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:45.6249706+01:00","Direction":"RX","Hex":"FB FB 38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:45.7055924+01:00","Direction":"RX","Hex":"38 4E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:45.7385861+01:00","Direction":"RX","Hex":"38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:46.2421826+01:00","Direction":"RX","Hex":"38 4E 38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:46.3918258+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:46.7557494+01:00","Direction":"RX","Hex":"FB FB 38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:46.7910992+01:00","Direction":"RX","Hex":"38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:46.9735033+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:47.0738221+01:00","Direction":"RX","Hex":"38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:47.1246517+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:47.1893189+01:00","Direction":"RX","Hex":"38 4F","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:47.2426057+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:49:47.3891932+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:02.3988751+01:00","Direction":"RX","Hex":"FB FB 38 51 FF D2 0E","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:02.4311554+01:00","Direction":"RX","Hex":"FB FB 38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:02.5637597+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:02.598427+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:02.7635602+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:02.8270744+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:03.0479158+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:03.0776612+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:03.123429+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:03.3991427+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:03.4444617+01:00","Direction":"RX","Hex":"FB FB 38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:03.5983427+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:03.7797588+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:04.211591+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:04.3102932+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:04.3965664+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:04.4289351+01:00","Direction":"RX","Hex":"FB FB 38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:04.5107622+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:05.1459633+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:05.1952327+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:05.3963227+01:00","Direction":"RX","Hex":"FF FB FB 38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:05.426122+01:00","Direction":"RX","Hex":"38 50","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:05.4798169+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:06.3962659+01:00","Direction":"RX","Hex":"FF","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:09.4262385+01:00","Direction":"RX","Hex":"FB FB 38 52","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:09.5071243+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:09.541988+01:00","Direction":"RX","Hex":"38 52","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:09.6229802+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:09.693285+01:00","Direction":"RX","Hex":"38 52","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:10.0430632+01:00","Direction":"RX","Hex":"38 51","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:10.0933917+01:00","Direction":"RX","Hex":"38 52","Interpretation":null}
+{"Timestamp":"2026-08-21T08:50:10.4096272+01:00","Direction":"RX","Hex":"FF D2 03","Interpretation":null}
+

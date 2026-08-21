@@ -306,14 +306,15 @@ partial class OtmrLiveControl
         Controls.Add(rootLayout);
         Name = "OtmrLiveControl";
         Size = new Size(1200, 700);
-        rootLayout.ResumeLayout(false);
-        connectionGroupBox.ResumeLayout(false);
-        connectionLayout.ResumeLayout(false);
+        connectionLayout.ResumeLayout(true);
         connectionLayout.PerformLayout();
-        captureGroupBox.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)captureGrid).EndInit();
-        captureButtonsPanel.ResumeLayout(false);
+        captureButtonsPanel.ResumeLayout(true);
         captureButtonsPanel.PerformLayout();
-        ResumeLayout(false);
+        connectionGroupBox.ResumeLayout(true);
+        captureGroupBox.ResumeLayout(true);
+        rootLayout.ResumeLayout(true);
+        ResumeLayout(true);
+        PerformLayout();
     }
 }
