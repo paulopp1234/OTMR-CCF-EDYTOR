@@ -9,8 +9,6 @@ public partial class OtmrBenchControl
 {
     private IOtmrRecordingStore? _recordingStore;
     private bool _databaseHooksInstalled;
-    private Guid? _databaseCaptureInputId;
-    private RcmElectricalTestState? _databaseCaptureState;
 
     internal void SetRecordingStore(IOtmrRecordingStore? recordingStore)
     {
@@ -19,10 +17,9 @@ public partial class OtmrBenchControl
             return;
 
         _databaseHooksInstalled = true;
-        captureVoltageRemovedButton.Click += DatabaseCaptureVoltageRemovedAfterClick;
-        captureVoltageAppliedButton.Click += DatabaseCaptureVoltageAppliedAfterClick;
-        captureWindowTimer.Tick += DatabaseCaptureWindowAfterTick;
-        compareStatesButton.Click += DatabaseCompareAfterClick;
+        _captureCoordinator.CaptureCompleted += DatabaseCaptureCompleted;
+        _captureCoordinator.ComparisonCompleted += DatabaseComparisonCompleted;
+        Disposed += OtmrBenchControl_DatabaseDisposed;
     }
 
     internal RcmProfileRecordingContext GetRecordingProfileContext()
@@ -41,54 +38,23 @@ public partial class OtmrBenchControl
             _rcmProfile.VehicleType);
     }
 
-    private void DatabaseCaptureVoltageRemovedAfterClick(object? sender, EventArgs e) =>
-        RememberDatabaseCapture(RcmElectricalTestState.VoltageRemoved);
-
-    private void DatabaseCaptureVoltageAppliedAfterClick(object? sender, EventArgs e) =>
-        RememberDatabaseCapture(RcmElectricalTestState.VoltageApplied24V);
-
-    private void RememberDatabaseCapture(RcmElectricalTestState state)
+    private void DatabaseCaptureCompleted(object? sender, RcmCaptureCompletedEventArgs e)
     {
-        if (_recordingStore?.IsRecording != true || !_captureCoordinator.IsCapturing)
+        if (_recordingStore?.IsRecording != true)
             return;
-
-        _databaseCaptureInputId = _captureCoordinator.ActiveInputId;
-        _databaseCaptureState = state;
+        _recordingStore.TryRecordRcmCapture(e.Pin, e.State, e.Evidence);
     }
 
-    private void DatabaseCaptureWindowAfterTick(object? sender, EventArgs e)
+    private void DatabaseComparisonCompleted(object? sender, RcmComparisonCompletedEventArgs e)
     {
-        if (_recordingStore?.IsRecording != true ||
-            _rcmProfile is null ||
-            _databaseCaptureInputId is not Guid inputId ||
-            _databaseCaptureState is not RcmElectricalTestState state)
-        {
-            _databaseCaptureInputId = null;
-            _databaseCaptureState = null;
+        if (_recordingStore?.IsRecording != true || e.Pin.Comparison.ComparedAt is null)
             return;
-        }
-
-        try
-        {
-            RcmPinProfile pin = _rcmProfile.GetInput(inputId);
-            RcmStateEvidence evidence = state == RcmElectricalTestState.VoltageRemoved
-                ? pin.VoltageRemoved
-                : pin.VoltageApplied24V;
-            _recordingStore.TryRecordRcmCapture(pin, state, evidence);
-        }
-        finally
-        {
-            _databaseCaptureInputId = null;
-            _databaseCaptureState = null;
-        }
+        _recordingStore.TryRecordRcmComparison(e.Pin);
     }
 
-    private void DatabaseCompareAfterClick(object? sender, EventArgs e)
+    private void OtmrBenchControl_DatabaseDisposed(object? sender, EventArgs e)
     {
-        if (_recordingStore?.IsRecording != true || SelectedProfilePin() is not RcmPinProfile pin)
-            return;
-        if (pin.Comparison.ComparedAt is null)
-            return;
-        _recordingStore.TryRecordRcmComparison(pin);
+        _captureCoordinator.CaptureCompleted -= DatabaseCaptureCompleted;
+        _captureCoordinator.ComparisonCompleted -= DatabaseComparisonCompleted;
     }
 }
