@@ -215,9 +215,6 @@ public partial class OtmrBenchControl : UserControl
 
     private void RenderConnector()
     {
-        if (benchGrid is null || connectorComboBox is null)
-            return;
-
         string connector = connectorComboBox.SelectedItem as string ?? string.Empty;
         benchGrid.SuspendLayout();
         try
@@ -294,7 +291,7 @@ public partial class OtmrBenchControl : UserControl
             return "No CCF loaded";
         if (definition.ExpectedRecordA is not int recordIndex)
             return "No fixed record — discover from live data";
-        if ((uint)recordIndex >= _document.Records.Count)
+        if ((uint)recordIndex >= (uint)_document.Records.Count)
             return $"Record {recordIndex} outside CCF";
 
         CcfRecord record = _document.Records[recordIndex];
@@ -310,7 +307,7 @@ public partial class OtmrBenchControl : UserControl
             return "NO CCF";
         if (definition.ExpectedRecordA is not int recordIndex)
             return "UNMAPPED";
-        if ((uint)recordIndex >= _document.Records.Count)
+        if ((uint)recordIndex >= (uint)_document.Records.Count)
             return "BAD RECORD";
 
         CcfRecord record = _document.Records[recordIndex];
@@ -320,7 +317,7 @@ public partial class OtmrBenchControl : UserControl
         if (definition.ExpectedChannel is int channel)
             matches &= record.Channel == channel;
         if (definition.ExpectedRecordB is int pair)
-            matches &= record.Type == 2 && record.PairRecord == pair;
+            matches &= record.Type == 2 && record.PairRecord.HasValue && record.PairRecord.Value == pair;
 
         return matches ? "STRUCTURE MATCH" : "CCF CHECK";
     }
@@ -332,7 +329,7 @@ public partial class OtmrBenchControl : UserControl
 
         return string.Join(", ", observation.Records.OrderBy(value => value).Select(recordIndex =>
         {
-            if (_document is not null && (uint)recordIndex < _document.Records.Count)
+            if (_document is not null && (uint)recordIndex < (uint)_document.Records.Count)
             {
                 CcfRecord record = _document.Records[recordIndex];
                 return $"{recordIndex}:{record.Name} c{record.Card}/ch{record.Channel}";
@@ -406,6 +403,10 @@ public partial class OtmrBenchControl : UserControl
         }
 
         _observations.TryGetValue(Key(definition), out BenchObservation? observation);
+        string lastActivity = observation is null
+            ? "—"
+            : observation.LastTimestamp.ToLocalTime().ToString("HH:mm:ss.fff");
+
         detailsTextBox.Text =
             $"PIN\r\n{definition.Connector}-{definition.Pin}\r\n\r\n" +
             $"ROLE / FUNCTION\r\n{definition.Role} | MIO {definition.Mio} | channel {definition.Channel}\r\n{definition.ExpectedFunction}\r\n\r\n" +
@@ -413,7 +414,7 @@ public partial class OtmrBenchControl : UserControl
             $"SAFETY\r\n{definition.SafetyInstruction}\r\n\r\n" +
             $"REFERENCE MAPPING\r\nRecords: {FormatExpectedRecords(definition)} | {FormatExpectedCcf(definition)}\r\n{definition.EvidenceStatus}\r\n\r\n" +
             $"CURRENT OPENED CCF\r\n{BuildCurrentCcfSummary(definition)}\r\nCheck: {EvaluateCcf(definition)}\r\n\r\n" +
-            $"LIVE OBSERVATION\r\n{BuildObservedSummary(observation)}\r\nLast value: {observation?.LastValue ?? "—"}\r\nLast activity: {observation?.LastTimestamp.ToLocalTime().ToString("HH:mm:ss.fff") ?? "—"}\r\nResult: {EvaluateObservation(definition, observation)}\r\n\r\n" +
+            $"LIVE OBSERVATION\r\n{BuildObservedSummary(observation)}\r\nLast value: {observation?.LastValue ?? "—"}\r\nLast activity: {lastActivity}\r\nResult: {EvaluateObservation(definition, observation)}\r\n\r\n" +
             $"SOURCE / NOTES\r\n{definition.Source}\r\n\r\n" +
             $"PROFILE FILE\r\n{_profilePath ?? "—"}";
     }
