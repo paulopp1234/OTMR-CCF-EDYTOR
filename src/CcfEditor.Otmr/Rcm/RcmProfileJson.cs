@@ -71,10 +71,12 @@ public static class RcmProfileJson
     public static void MigrateAndNormalize(RcmProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        if (profile.SchemaVersion is not ("1.0" or RcmProfile.CurrentSchemaVersion))
+        if (profile.SchemaVersion is not ("1.0" or "1.1" or RcmProfile.CurrentSchemaVersion))
             throw new InvalidDataException($"Unsupported RCM schema version '{profile.SchemaVersion}'.");
 
         profile.Connectors ??= new List<RcmConnector>();
+        foreach (RcmConnector connector in profile.Connectors)
+            connector.OrderedPins ??= new List<string>();
         profile.Pins ??= new List<RcmPinProfile>();
         foreach (RcmPinProfile pin in profile.Pins)
         {
@@ -88,7 +90,9 @@ public static class RcmProfileJson
 
             if ((!pin.VoltageRemoved.Tested || !pin.VoltageApplied24V.Tested) && pin.Comparison.ComparedAt is not null)
                 pin.Comparison = new RcmStateComparison();
-            if (pin.Comparison.ComparedAt is null)
+            if (!pin.PhysicalMappingAssigned)
+                pin.RcmResult = RcmResultStates.Unassigned;
+            else if (pin.Comparison.ComparedAt is null)
                 pin.RcmResult = RcmCaptureWindowCoordinator.ResultForCapturedStates(pin);
         }
 
@@ -127,6 +131,9 @@ public static class RcmProfileJson
         if (profile.Connectors.Any(connector => string.IsNullOrWhiteSpace(connector.Name)) ||
             profile.Connectors.GroupBy(connector => connector.Name, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1))
             throw new InvalidDataException("The RCM profile contains blank or duplicate connector names.");
+        if (profile.Connectors.Any(connector => connector.OrderedPins.Any(string.IsNullOrWhiteSpace) ||
+                                               connector.OrderedPins.Distinct(StringComparer.Ordinal).Count() != connector.OrderedPins.Count))
+            throw new InvalidDataException("Connector ordered pin lists cannot contain blank or duplicate pins.");
 
         foreach (RcmPinProfile pin in profile.Pins)
         {

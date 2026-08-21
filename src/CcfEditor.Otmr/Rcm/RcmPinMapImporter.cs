@@ -66,10 +66,6 @@ public static class RcmPinMapImporter
         if (string.IsNullOrWhiteSpace(pin.ReturnOrPair)) pin.ReturnOrPair = definition.ReturnOrPair;
         if (string.IsNullOrWhiteSpace(pin.SafetyClassification)) pin.SafetyClassification = definition.SafetyInstruction;
         pin.Testable = definition.IsVoltageTestPoint;
-        pin.RcmResult = !pin.Testable
-            ? RcmResultStates.NotTestable
-            : previousResult == RcmResultStates.NotTestable
-                ? RcmCaptureWindowCoordinator.ResultForCapturedStates(pin)
-                : previousResult;
+        RcmProfileEditor.RefreshResultAfterPhysicalEdit(pin, previousResult);
     }
 }

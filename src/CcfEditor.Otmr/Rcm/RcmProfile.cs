@@ -12,6 +12,7 @@ public static class RcmResultStates
     public const string NoRepeatableDifference = "NO_REPEATABLE_DIFFERENCE";
     public const string DecoderNotVerified = "DECODER_NOT_VERIFIED";
     public const string NotTestable = "NOT_TESTABLE";
+    public const string Unassigned = "UNASSIGNED";
 
     public static IReadOnlySet<string> Allowed { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
@@ -22,7 +23,8 @@ public static class RcmResultStates
         RawDifferenceFound,
         NoRepeatableDifference,
         DecoderNotVerified,
-        NotTestable
+        NotTestable,
+        Unassigned
     };
 }
 
@@ -34,7 +36,7 @@ public enum RcmElectricalTestState
 
 public sealed class RcmProfile
 {
-    public const string CurrentSchemaVersion = "1.1";
+    public const string CurrentSchemaVersion = "1.2";
 
     public string SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string VehicleType { get; set; } = "Class 171";
@@ -54,15 +56,22 @@ public sealed class RcmProfile
             string.Equals(candidate.Pin, pin, StringComparison.Ordinal));
 
     [JsonIgnore]
-    public int TestablePinCount => Pins.Count(pin => pin.Testable);
+    public int LogicalCcfInputCount => Pins.Count(pin => pin.CcfReference is not null);
+    [JsonIgnore]
+    public int AssignedPhysicalInputCount => Pins.Count(pin => pin.PhysicalMappingAssigned);
+    [JsonIgnore]
+    public int UnassignedInputCount => Pins.Count(pin => !pin.PhysicalMappingAssigned);
+    [JsonIgnore]
+    public int TestablePinCount => Pins.Count(pin => pin.PhysicalMappingAssigned && pin.Testable);
     [JsonIgnore]
     public int CompletedTestablePinCount => Pins.Count(pin =>
-        pin.Testable && pin.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested);
+        pin.PhysicalMappingAssigned && pin.Testable && pin.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested);
 }
 
 public sealed class RcmConnector
 {
     public string Name { get; set; } = string.Empty;
+    public List<string> OrderedPins { get; set; } = new();
 }
 
 public sealed class RcmPinProfile
@@ -85,9 +94,11 @@ public sealed class RcmPinProfile
     public string RcmResult { get; set; } = RcmResultStates.NotTested;
 
     [JsonIgnore]
-    public string DisplayKey => string.IsNullOrWhiteSpace(Connector) && string.IsNullOrWhiteSpace(Pin)
-        ? "UNASSIGNED"
-        : $"{Connector}-{Pin}";
+    public bool PhysicalMappingAssigned =>
+        !string.IsNullOrWhiteSpace(Connector) && !string.IsNullOrWhiteSpace(Pin);
+
+    [JsonIgnore]
+    public string DisplayKey => PhysicalMappingAssigned ? $"{Connector}-{Pin}" : RcmResultStates.Unassigned;
 }
 
 public sealed class RcmCcfReference

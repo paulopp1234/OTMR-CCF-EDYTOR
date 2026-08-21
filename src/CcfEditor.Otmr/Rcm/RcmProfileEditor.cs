@@ -58,13 +58,41 @@ public readonly record struct RcmInputEditResult(bool LogicalMappingChanged, boo
 
 public static class RcmProfileEditor
 {
-    public static void AddConnector(RcmProfile profile, string name)
+    public static void AddConnector(RcmProfile profile, string name, IEnumerable<string>? orderedPins = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         name = RequireConnectorName(name);
         if (profile.Connectors.Any(connector => string.Equals(connector.Name, name, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"Connector '{name}' already exists.");
-        profile.Connectors.Add(new RcmConnector { Name = name });
+        profile.Connectors.Add(new RcmConnector
+        {
+            Name = name,
+            OrderedPins = NormalizeOrderedPins(orderedPins)
+        });
+    }
+
+    public static void SetConnectorOrderedPins(RcmProfile profile, string connectorName, IEnumerable<string> orderedPins)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        RcmConnector connector = profile.Connectors.Single(item =>
+            string.Equals(item.Name, connectorName, StringComparison.OrdinalIgnoreCase));
+        connector.OrderedPins = NormalizeOrderedPins(orderedPins);
+    }
+
+    public static string? SuggestNextUnusedPin(RcmProfile profile, string connectorName)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        RcmConnector? connector = profile.Connectors.SingleOrDefault(item =>
+            string.Equals(item.Name, connectorName, StringComparison.OrdinalIgnoreCase));
+        if (connector is null || connector.OrderedPins.Count == 0)
+            return null;
+
+        var used = profile.Pins
+            .Where(pin => string.Equals(pin.Connector, connector.Name, StringComparison.OrdinalIgnoreCase) &&
+                          !string.IsNullOrWhiteSpace(pin.Pin))
+            .Select(pin => pin.Pin)
+            .ToHashSet(StringComparer.Ordinal);
+        return connector.OrderedPins.FirstOrDefault(pin => !used.Contains(pin));
     }
 
     public static void RenameConnector(RcmProfile profile, string oldName, string newName)
@@ -134,12 +162,23 @@ public static class RcmProfileEditor
         // Editing descriptive or logical metadata must not silently discard an
         // existing comparison/result. Only a testability transition needs a new
         // base state.
-        pin.RcmResult = !pin.Testable
-            ? RcmResultStates.NotTestable
-            : previousResult == RcmResultStates.NotTestable
-                ? RcmCaptureWindowCoordinator.ResultForCapturedStates(pin)
-                : previousResult;
+        RefreshResultAfterPhysicalEdit(pin, previousResult);
         return new RcmInputEditResult(logicalChanged, hadEvidence);
+    }
+
+    public static void AssignPhysical(RcmProfile profile, Guid inputId, string connector, string physicalPin)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        RcmPinProfile pin = profile.GetInput(inputId);
+        connector = string.IsNullOrWhiteSpace(connector) ? string.Empty : RequireConnectorName(connector);
+        physicalPin = physicalPin.Trim();
+        ValidatePhysicalAssignment(profile, inputId, connector, physicalPin);
+
+        string previousResult = pin.RcmResult;
+        pin.Connector = connector;
+        pin.Pin = physicalPin;
+        EnsureConnectorExists(profile, connector);
+        RefreshResultAfterPhysicalEdit(pin, previousResult);
     }
 
     public static bool DeleteInput(RcmProfile profile, Guid inputId)
@@ -193,12 +232,21 @@ public static class RcmProfileEditor
             ValidateRecord(edit.RecordB, document, "Record B");
         }
 
-        if (!string.IsNullOrWhiteSpace(edit.Connector) && !string.IsNullOrWhiteSpace(edit.Pin) &&
+        ValidatePhysicalAssignment(profile, existingId, edit.Connector.Trim(), edit.Pin.Trim());
+    }
+
+    private static void ValidatePhysicalAssignment(
+        RcmProfile profile,
+        Guid? existingId,
+        string connector,
+        string physicalPin)
+    {
+        if (!string.IsNullOrWhiteSpace(connector) && !string.IsNullOrWhiteSpace(physicalPin) &&
             profile.Pins.Any(pin => pin.Id != existingId &&
-                                    string.Equals(pin.Connector, edit.Connector.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                                    string.Equals(pin.Pin, edit.Pin.Trim(), StringComparison.Ordinal)))
+                                    string.Equals(pin.Connector, connector, StringComparison.OrdinalIgnoreCase) &&
+                                    string.Equals(pin.Pin, physicalPin, StringComparison.Ordinal)))
         {
-            throw new InvalidOperationException($"Physical input {edit.Connector.Trim()}-{edit.Pin.Trim()} already exists.");
+            throw new InvalidOperationException($"Physical input {connector}-{physicalPin} already exists.");
         }
     }
 
@@ -222,7 +270,46 @@ public static class RcmProfileEditor
     private static string RequireConnectorName(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        return name.Trim();
+        name = name.Trim();
+        if (string.Equals(name, RcmInputFilter.All, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(name, RcmInputFilter.Unassigned, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"'{name}' is reserved for the connector filter.");
+        return name;
+    }
+
+    private static List<string> NormalizeOrderedPins(IEnumerable<string>? orderedPins)
+    {
+        List<string> result = orderedPins?
+            .Select(pin => pin.Trim())
+            .Where(pin => pin.Length > 0)
+            .ToList() ?? new List<string>();
+        if (result.Distinct(StringComparer.Ordinal).Count() != result.Count)
+            throw new InvalidOperationException("A connector pin sequence cannot contain duplicate pin names.");
+        return result;
+    }
+
+    internal static void RefreshResultAfterPhysicalEdit(RcmPinProfile pin, string? previousResult = null)
+    {
+        if (!pin.PhysicalMappingAssigned)
+        {
+            pin.RcmResult = RcmResultStates.Unassigned;
+            return;
+        }
+        if (!pin.Testable)
+        {
+            pin.RcmResult = RcmResultStates.NotTestable;
+            return;
+        }
+        if (pin.Comparison.ComparedAt is not null)
+        {
+            pin.RcmResult = previousResult is not (null or RcmResultStates.Unassigned or RcmResultStates.NotTestable)
+                ? previousResult
+                : pin.Comparison.RepeatableDifferences.Count > 0
+                    ? RcmResultStates.RawDifferenceFound
+                    : RcmResultStates.NoRepeatableDifference;
+            return;
+        }
+        pin.RcmResult = RcmCaptureWindowCoordinator.ResultForCapturedStates(pin);
     }
 
     private static void EnsureConnectorExists(RcmProfile profile, string connector)

@@ -15,6 +15,10 @@ public partial class OtmrBenchControl : UserControl
     private string? _rcmProfilePath;
     private string? _pinMapPath;
     private bool _closing;
+    private bool _renderingGrid;
+    private string? _lastAssignedConnector;
+    private string? _pendingConnectorEdit;
+    private ComboBox? _activeConnectorEditingControl;
 
     public OtmrBenchControl()
     {
@@ -63,7 +67,7 @@ public partial class OtmrBenchControl : UserControl
         if (_rcmProfile is null)
             return default;
         RcmPinMapImportResult result = RcmPinMapImporter.ImportFillUnassigned(_rcmProfile, _definitions);
-        PopulateConnectors();
+        PopulateConnectors(resetToAll: true);
         RenderTable();
         return result;
     }
@@ -140,7 +144,7 @@ public partial class OtmrBenchControl : UserControl
             RcmProfile loaded = await RcmProfileJson.LoadAsync(dialog.FileName);
             _rcmProfile = loaded;
             _rcmProfilePath = Path.GetFullPath(dialog.FileName);
-            PopulateConnectors();
+            PopulateConnectors(resetToAll: true);
             RenderTable();
             UpdateCcfStatus();
             statusLabel.Text =
@@ -225,7 +229,8 @@ public partial class OtmrBenchControl : UserControl
             RcmProfileEditor.AddConnector(_rcmProfile, dialog.Value);
             MarkProfileModified();
             PopulateConnectors();
-            connectorComboBox.SelectedItem = dialog.Value;
+            RenderTable();
+            statusLabel.Text = $"Connector '{dialog.Value.Trim()}' added. Existing RCM inputs and the current filter are unchanged.";
             await SaveProfileToKnownPathAsync(false);
         }
         catch (Exception ex)
@@ -236,7 +241,7 @@ public partial class OtmrBenchControl : UserControl
 
     private async void RenameConnectorButton_Click(object? sender, EventArgs e)
     {
-        if (_rcmProfile is null || connectorComboBox.SelectedIndex <= 0 || connectorComboBox.SelectedItem is not string oldName)
+        if (_rcmProfile is null || SpecificConnectorFilter() is not string oldName)
             return;
         using var dialog = new TextPromptDialog("Rename Connector", "New connector name:", oldName);
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -247,6 +252,7 @@ public partial class OtmrBenchControl : UserControl
             MarkProfileModified();
             PopulateConnectors();
             connectorComboBox.SelectedItem = dialog.Value;
+            RenderTable();
             await SaveProfileToKnownPathAsync(false);
         }
         catch (Exception ex)
@@ -257,7 +263,7 @@ public partial class OtmrBenchControl : UserControl
 
     private async void DeleteConnectorButton_Click(object? sender, EventArgs e)
     {
-        if (_rcmProfile is null || connectorComboBox.SelectedIndex <= 0 || connectorComboBox.SelectedItem is not string name)
+        if (_rcmProfile is null || SpecificConnectorFilter() is not string name)
             return;
         int count = _rcmProfile.Pins.Count(pin => string.Equals(pin.Connector, name, StringComparison.OrdinalIgnoreCase));
         string message = count == 0
@@ -273,11 +279,37 @@ public partial class OtmrBenchControl : UserControl
         await SaveProfileToKnownPathAsync(false);
     }
 
+    private async void EditConnectorPinsButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null)
+            return;
+        string? connectorName = SpecificConnectorFilter();
+        if (connectorName is null && SelectedProfilePin() is { Connector.Length: > 0 } selected)
+            connectorName = selected.Connector;
+        RcmConnector? connector = connectorName is null ? null : _rcmProfile.Connectors.FirstOrDefault(item =>
+            string.Equals(item.Name, connectorName, StringComparison.OrdinalIgnoreCase));
+        if (connector is null)
+        {
+            statusLabel.Text = "Select a connector filter or an assigned input before editing an ordered pin sequence.";
+            return;
+        }
+
+        using var dialog = new RcmConnectorPinsDialog(connector);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        RcmProfileEditor.SetConnectorOrderedPins(_rcmProfile, connector.Name, dialog.OrderedPins);
+        MarkProfileModified();
+        statusLabel.Text = dialog.OrderedPins.Count == 0
+            ? $"Connector {connector.Name} has no assisted pin sequence; Assign Next Pin will not invent one."
+            : $"Connector {connector.Name} pin sequence saved ({dialog.OrderedPins.Count} pins).";
+        await SaveProfileToKnownPathAsync(false);
+    }
+
     private async void AddInputButton_Click(object? sender, EventArgs e)
     {
         if (_rcmProfile is null)
             return;
-        string connector = connectorComboBox.SelectedIndex > 0 ? connectorComboBox.SelectedItem as string ?? string.Empty : string.Empty;
+        string connector = SpecificConnectorFilter() ?? string.Empty;
         var initial = new RcmInputEdit { Connector = connector };
         using var dialog = new RcmInputEditorDialog("Add RCM Input / Pin", _rcmProfile.Connectors.Select(item => item.Name), initial);
         if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result is null)
@@ -287,7 +319,6 @@ public partial class OtmrBenchControl : UserControl
             RcmPinProfile pin = RcmProfileEditor.AddInput(_rcmProfile, dialog.Result, _document);
             MarkProfileModified();
             PopulateConnectors();
-            SelectConnectorFor(pin.Connector);
             RenderTable(pin.Id);
             await SaveProfileToKnownPathAsync(false);
         }
@@ -322,7 +353,6 @@ public partial class OtmrBenchControl : UserControl
             RcmProfileEditor.UpdateInput(_rcmProfile, pin.Id, dialog.Result, _document);
             MarkProfileModified();
             PopulateConnectors();
-            SelectConnectorFor(pin.Connector);
             RenderTable(pin.Id);
             await SaveProfileToKnownPathAsync(false);
         }
@@ -347,8 +377,14 @@ public partial class OtmrBenchControl : UserControl
         await SaveProfileToKnownPathAsync(false);
     }
 
-    private void SelectConnectorFor(string connector) =>
-        connectorComboBox.SelectedItem = string.IsNullOrWhiteSpace(connector) ? "(Unassigned)" : connector;
+    private string? SpecificConnectorFilter()
+    {
+        string? selected = connectorComboBox.SelectedItem as string;
+        return selected is null || string.Equals(selected, RcmInputFilter.All, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(selected, RcmInputFilter.Unassigned, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : selected;
+    }
 
     private void MarkProfileModified()
     {
@@ -379,7 +415,11 @@ public partial class OtmrBenchControl : UserControl
         current?.LogicalCard != edit.LogicalCard || current?.LogicalChannel != edit.LogicalChannel ||
         current?.RecordType != edit.RecordType;
 
-    private void ConnectorComboBox_SelectedIndexChanged(object? sender, EventArgs e) => RenderTable();
+    private void ConnectorComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        if (!_renderingGrid)
+            RenderTable();
+    }
 
     private void RcmGrid_SelectionChanged(object? sender, EventArgs e) => UpdateWorkflow();
 
@@ -481,9 +521,11 @@ public partial class OtmrBenchControl : UserControl
         }
     }
 
-    private void PopulateConnectors()
+    private void PopulateConnectors() => PopulateConnectors(resetToAll: false);
+
+    private void PopulateConnectors(bool resetToAll)
     {
-        string? previous = connectorComboBox.SelectedItem as string;
+        string? previous = resetToAll ? RcmInputFilter.All : connectorComboBox.SelectedItem as string;
         IEnumerable<string> values = _rcmProfile?.Connectors.Select(connector => connector.Name) ?? Enumerable.Empty<string>();
         string[] connectors = values.Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
@@ -493,10 +535,16 @@ public partial class OtmrBenchControl : UserControl
         try
         {
             connectorComboBox.Items.Clear();
-            connectorComboBox.Items.Add("(Unassigned)");
+            connectorComboBox.Items.Add(RcmInputFilter.All);
+            connectorComboBox.Items.Add(RcmInputFilter.Unassigned);
             connectorComboBox.Items.AddRange(connectors);
-            if (previous is not null && connectors.Contains(previous, StringComparer.OrdinalIgnoreCase))
-                connectorComboBox.SelectedItem = connectors.First(value => string.Equals(value, previous, StringComparison.OrdinalIgnoreCase));
+            connectorColumn.Items.Clear();
+            connectorColumn.Items.Add(string.Empty);
+            connectorColumn.Items.AddRange(connectors);
+            string? restored = connectorComboBox.Items.Cast<string>().FirstOrDefault(value =>
+                string.Equals(value, previous, StringComparison.OrdinalIgnoreCase));
+            if (restored is not null)
+                connectorComboBox.SelectedItem = restored;
             else
                 connectorComboBox.SelectedIndex = 0;
         }
@@ -512,19 +560,19 @@ public partial class OtmrBenchControl : UserControl
             return;
 
         preferredInputId ??= rcmGrid.CurrentRow?.Tag is Guid selectedId ? selectedId : null;
-        string connectorSelection = connectorComboBox.SelectedItem as string ?? "(Unassigned)";
-        string connector = connectorSelection == "(Unassigned)" ? string.Empty : connectorSelection;
+        string connectorSelection = connectorComboBox.SelectedItem as string ?? RcmInputFilter.All;
         rcmGrid.SuspendLayout();
+        _renderingGrid = true;
         DataGridViewRow? selectedRow = null;
         try
         {
             rcmGrid.Rows.Clear();
             if (_rcmProfile is not null)
             {
-                foreach (RcmPinProfile pin in _rcmProfile.Pins.Where(pin =>
-                             string.Equals(pin.Connector, connector, StringComparison.OrdinalIgnoreCase)))
+                foreach (RcmPinProfile pin in RcmInputFilter.Apply(_rcmProfile, connectorSelection))
                 {
                     int index = rcmGrid.Rows.Add(
+                        pin.Connector,
                         pin.Pin,
                         pin.Function,
                         FormatCcfReference(pin.CcfReference),
@@ -532,10 +580,10 @@ public partial class OtmrBenchControl : UserControl
                         FormatCaptureState(pin, RcmElectricalTestState.VoltageApplied24V),
                         FormatDifference(pin),
                         "NOT VERIFIED",
-                        pin.Testable ? pin.RcmResult : "NOT TESTABLE");
+                        pin.RcmResult);
                     DataGridViewRow row = rcmGrid.Rows[index];
                     row.Tag = pin.Id;
-                    ApplyRowStyle(row, pin.Testable, pin.RcmResult);
+                    ApplyRowStyle(row, pin);
                     if (pin.Id == preferredInputId)
                         selectedRow = row;
                 }
@@ -543,6 +591,7 @@ public partial class OtmrBenchControl : UserControl
         }
         finally
         {
+            _renderingGrid = false;
             rcmGrid.ResumeLayout();
         }
 
@@ -555,6 +604,134 @@ public partial class OtmrBenchControl : UserControl
 
         UpdateProgress();
         UpdateWorkflow();
+    }
+
+    private void RcmGrid_CellValidating(object? sender, DataGridViewCellValidatingEventArgs e)
+    {
+        if (_renderingGrid || e.RowIndex < 0 || e.ColumnIndex != connectorColumn.Index)
+            return;
+        string connector = _pendingConnectorEdit ?? Convert.ToString(e.FormattedValue)?.Trim() ?? string.Empty;
+        if (!connectorColumn.Items.Cast<string>().Contains(connector, StringComparer.OrdinalIgnoreCase))
+            connectorColumn.Items.Add(connector);
+    }
+
+    private async void RcmGrid_CellEndEdit(object? sender, DataGridViewCellEventArgs e)
+    {
+        int column = e.ColumnIndex;
+        if (_renderingGrid || _rcmProfile is null || e.RowIndex < 0 ||
+            (column != connectorColumn.Index && column != pinColumn.Index) ||
+            rcmGrid.Rows[e.RowIndex].Tag is not Guid id)
+            return;
+
+        try
+        {
+            DataGridViewRow row = rcmGrid.Rows[e.RowIndex];
+            string connector = column == connectorColumn.Index && _pendingConnectorEdit is not null
+                ? _pendingConnectorEdit
+                : Convert.ToString(row.Cells[connectorColumn.Index].Value)?.Trim() ?? string.Empty;
+            string pin = Convert.ToString(row.Cells[pinColumn.Index].Value)?.Trim() ?? string.Empty;
+            StopConnectorEditingCapture();
+            RcmProfileEditor.AssignPhysical(_rcmProfile, id, connector, pin);
+            if (connector.Length > 0)
+                _lastAssignedConnector = connector;
+            MarkProfileModified();
+            PopulateConnectors();
+            RenderTable(id);
+            statusLabel.Text = _rcmProfile.GetInput(id).PhysicalMappingAssigned
+                ? $"Assigned {connector}/{pin}; stable input identity, CCF mapping and evidence preserved."
+                : "Physical mapping remains UNASSIGNED until both Connector and Pin are entered.";
+            await SaveProfileToKnownPathAsync(false);
+        }
+        catch (Exception ex)
+        {
+            StopConnectorEditingCapture();
+            RenderTable(id);
+            MessageBox.Show(this, ex.Message, "Cannot assign physical input", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void RcmGrid_EditingControlShowing(object? sender, DataGridViewEditingControlShowingEventArgs e)
+    {
+        if (rcmGrid.CurrentCell?.ColumnIndex == connectorColumn.Index && e.Control is ComboBox combo)
+        {
+            StopConnectorEditingCapture();
+            _activeConnectorEditingControl = combo;
+            _pendingConnectorEdit = combo.Text.Trim();
+            combo.TextChanged += ConnectorEditingControl_TextChanged;
+            combo.DropDownStyle = ComboBoxStyle.DropDown;
+            combo.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+            combo.AutoCompleteSource = AutoCompleteSource.ListItems;
+        }
+    }
+
+    private void ConnectorEditingControl_TextChanged(object? sender, EventArgs e)
+    {
+        if (sender is ComboBox combo)
+            _pendingConnectorEdit = combo.Text.Trim();
+    }
+
+    private void StopConnectorEditingCapture()
+    {
+        if (_activeConnectorEditingControl is not null)
+            _activeConnectorEditingControl.TextChanged -= ConnectorEditingControl_TextChanged;
+        _activeConnectorEditingControl = null;
+        _pendingConnectorEdit = null;
+    }
+
+    private static void RcmGrid_DataError(object? sender, DataGridViewDataErrorEventArgs e) =>
+        e.ThrowException = false;
+
+    private async void AssignNextPinButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null || SelectedProfilePin() is not RcmPinProfile selected)
+            return;
+        string? connector = selected.PhysicalMappingAssigned ? selected.Connector : _lastAssignedConnector ?? SpecificConnectorFilter();
+        if (string.IsNullOrWhiteSpace(connector))
+        {
+            statusLabel.Text = "Assign a connector first; no connector was inferred.";
+            return;
+        }
+        string? suggestedPin = RcmProfileEditor.SuggestNextUnusedPin(_rcmProfile, connector);
+        if (suggestedPin is null)
+        {
+            statusLabel.Text = $"No pin was assigned: connector {connector} has no configured unused pin in its ordered sequence.";
+            return;
+        }
+
+        RcmPinProfile? target = selected.PhysicalMappingAssigned ? NextUnassignedAfter(selected.Id) : selected;
+        if (target is null)
+        {
+            statusLabel.Text = "There are no unassigned RCM inputs left.";
+            return;
+        }
+        try
+        {
+            RcmProfileEditor.AssignPhysical(_rcmProfile, target.Id, connector, suggestedPin);
+            _lastAssignedConnector = connector;
+            MarkProfileModified();
+            PopulateConnectors();
+            RenderTable(target.Id);
+            statusLabel.Text = $"Assigned next unassigned input to {connector}/{suggestedPin} using its configured pin sequence.";
+            await SaveProfileToKnownPathAsync(false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot assign next pin", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private RcmPinProfile? NextUnassignedAfter(Guid inputId)
+    {
+        if (_rcmProfile is null || _rcmProfile.Pins.Count == 0)
+            return null;
+        int start = _rcmProfile.Pins.FindIndex(pin => pin.Id == inputId);
+        for (int offset = 1; offset <= _rcmProfile.Pins.Count; offset++)
+        {
+            RcmPinProfile candidate = _rcmProfile.Pins[(start + offset + _rcmProfile.Pins.Count) % _rcmProfile.Pins.Count];
+            if (!candidate.PhysicalMappingAssigned)
+                return candidate;
+        }
+        return null;
     }
 
     private void UpdateCaptureStatusOnly()
@@ -594,7 +771,15 @@ public partial class OtmrBenchControl : UserControl
         voltageRemovedInstructionLabel.Text = $"REMOVE TEST VOLTAGE FROM {pinKey}";
         voltageAppliedInstructionLabel.Text = $"APPLY +24 V TO {pinKey}";
 
-        if (!pin.Testable)
+        if (!pin.PhysicalMappingAssigned)
+        {
+            voltageRemovedStatusLabel.Text = RcmResultStates.Unassigned;
+            voltageAppliedStatusLabel.Text = RcmResultStates.Unassigned;
+            evidenceTextBox.Text =
+                "UNASSIGNED\r\n\r\nThis logical CCF input has no complete physical mapping. " +
+                "Enter both Connector and Pin in the table (or use Edit Selected Input), then explicitly configure Testable before voltage capture.";
+        }
+        else if (!pin.Testable)
         {
             voltageRemovedStatusLabel.Text = "NOT TESTABLE";
             voltageAppliedStatusLabel.Text = "NOT TESTABLE";
@@ -616,7 +801,7 @@ public partial class OtmrBenchControl : UserControl
     {
         bool capturing = _captureCoordinator.IsCapturing;
         RcmPinProfile? pin = SelectedProfilePin();
-        bool canCapture = _rcmProfile is not null && pin?.Testable == true && !capturing;
+        bool canCapture = _rcmProfile is not null && pin?.PhysicalMappingAssigned == true && pin.Testable && !capturing;
         createRcmProfileButton.Enabled = _document is not null && !capturing;
         openRcmProfileButton.Enabled = !capturing;
         saveRcmProfileButton.Enabled = _rcmProfile is not null && !capturing;
@@ -631,10 +816,14 @@ public partial class OtmrBenchControl : UserControl
         compareStatesButton.Enabled = canCapture && pin!.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested;
         resetInputButton.Enabled = _rcmProfile is not null && pin is not null && !capturing;
         addConnectorButton.Enabled = _rcmProfile is not null && !capturing;
-        renameConnectorButton.Enabled = _rcmProfile is not null && connectorComboBox.SelectedIndex > 0 && !capturing;
+        renameConnectorButton.Enabled = _rcmProfile is not null && SpecificConnectorFilter() is not null && !capturing;
         deleteConnectorButton.Enabled = renameConnectorButton.Enabled;
+        editConnectorPinsButton.Enabled = _rcmProfile is not null &&
+                                          (SpecificConnectorFilter() is not null || !string.IsNullOrWhiteSpace(pin?.Connector)) &&
+                                          !capturing;
         addInputButton.Enabled = _rcmProfile is not null && !capturing;
         editInputButton.Enabled = pin is not null && !capturing;
+        assignNextPinButton.Enabled = pin is not null && !capturing;
         deleteInputButton.Enabled = pin is not null && !capturing;
     }
 
@@ -642,7 +831,11 @@ public partial class OtmrBenchControl : UserControl
     {
         progressLabel.Text = _rcmProfile is null
             ? "RCM Progress: no profile created/opened"
-            : $"RCM Progress: {_rcmProfile.CompletedTestablePinCount} / {_rcmProfile.TestablePinCount} testable inputs complete";
+            : $"Logical CCF inputs: {_rcmProfile.LogicalCcfInputCount:N0} | " +
+              $"Assigned physical inputs: {_rcmProfile.AssignedPhysicalInputCount:N0} | " +
+              $"Unassigned: {_rcmProfile.UnassignedInputCount:N0} | " +
+              $"Testable: {_rcmProfile.TestablePinCount:N0} | " +
+              $"RCM complete: {_rcmProfile.CompletedTestablePinCount:N0} / {_rcmProfile.TestablePinCount:N0}";
         profilePathLabel.Text = _rcmProfile is null
             ? "RCM JSON: none"
             : $"RCM JSON: {_rcmProfilePath ?? "not saved yet"} | Decoder: NOT VERIFIED";
@@ -655,6 +848,8 @@ public partial class OtmrBenchControl : UserControl
 
     private static string FormatCaptureState(RcmPinProfile pin, RcmElectricalTestState state)
     {
+        if (!pin.PhysicalMappingAssigned)
+            return RcmResultStates.Unassigned;
         if (!pin.Testable)
             return "NOT TESTABLE";
         RcmStateEvidence evidence = state == RcmElectricalTestState.VoltageRemoved
@@ -711,22 +906,27 @@ public partial class OtmrBenchControl : UserControl
             "Electrical condition is operator-supplied. It is not interpreted as CCF ON/OFF, a record number, card/channel, PASS, or FAIL.";
     }
 
-    private static void ApplyRowStyle(DataGridViewRow row, bool testable, string result)
+    private static void ApplyRowStyle(DataGridViewRow row, RcmPinProfile pin)
     {
-        if (!testable)
+        if (!pin.PhysicalMappingAssigned)
+        {
+            row.DefaultCellStyle.BackColor = Color.LemonChiffon;
+            row.DefaultCellStyle.ForeColor = Color.Black;
+        }
+        else if (!pin.Testable)
         {
             row.DefaultCellStyle.BackColor = Color.Gainsboro;
             row.DefaultCellStyle.ForeColor = Color.DimGray;
         }
-        else if (result == RcmResultStates.RawDifferenceFound)
+        else if (pin.RcmResult == RcmResultStates.RawDifferenceFound)
         {
             row.DefaultCellStyle.BackColor = Color.LightCyan;
         }
-        else if (result == RcmResultStates.BothStatesCaptured)
+        else if (pin.RcmResult == RcmResultStates.BothStatesCaptured)
         {
             row.DefaultCellStyle.BackColor = Color.LightGoldenrodYellow;
         }
-        else if (result is RcmResultStates.VoltageRemovedCaptured or RcmResultStates.VoltageApplied24VCaptured)
+        else if (pin.RcmResult is RcmResultStates.VoltageRemovedCaptured or RcmResultStates.VoltageApplied24VCaptured)
         {
             row.DefaultCellStyle.BackColor = Color.AliceBlue;
         }

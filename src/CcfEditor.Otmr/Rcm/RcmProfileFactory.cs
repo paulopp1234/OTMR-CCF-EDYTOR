@@ -42,7 +42,7 @@ public static class RcmProfileFactory
                 SafetyClassification = string.Empty,
                 Testable = false,
                 CcfReference = BuildCcfReference(recordA, recordB),
-                RcmResult = RcmResultStates.NotTestable
+                RcmResult = RcmResultStates.Unassigned
             });
         }
 

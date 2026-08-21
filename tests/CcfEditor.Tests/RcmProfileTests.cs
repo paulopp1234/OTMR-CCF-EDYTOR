@@ -27,11 +27,119 @@ public sealed class RcmProfileTests
             Assert.Equal(string.Empty, input.SafetyClassification);
             Assert.False(input.Testable);
             Assert.NotNull(input.CcfReference);
+            Assert.Equal(RcmResultStates.Unassigned, input.RcmResult);
         });
         Assert.Contains(profile.Pins, input => input.CcfReference?.RecordA == 0 &&
             input.CcfReference.RecordB == 12 && input.CcfReference.LogicalCard == 0 &&
             input.CcfReference.LogicalChannel == 0);
         Assert.Equal(source, File.ReadAllBytes(document.SourcePath!));
+    }
+
+    [Fact]
+    public void AllFilterShowsEveryLogicalCcfInputAndAddingConnectorDoesNotHideOrDeleteRows()
+    {
+        (CcfDocument document, _) = LoadCcf();
+        RcmProfile profile = RcmProfileFactory.CreateFromCcf(document, "Class 171", FixedTime);
+        Guid[] ids = profile.Pins.Select(pin => pin.Id).ToArray();
+
+        Assert.Equal(profile.LogicalCcfInputCount, RcmInputFilter.Apply(profile, RcmInputFilter.All).Count());
+        RcmProfileEditor.AddConnector(profile, "J1");
+
+        Assert.Equal(ids, profile.Pins.Select(pin => pin.Id));
+        Assert.Equal(profile.LogicalCcfInputCount, RcmInputFilter.Apply(profile, RcmInputFilter.All).Count());
+    }
+
+    [Fact]
+    public void UnassignedAndConnectorFiltersUsePhysicalAssignmentsOnly()
+    {
+        (CcfDocument document, _) = LoadCcf();
+        RcmProfile profile = RcmProfileFactory.CreateFromCcf(document, "Class 171", FixedTime);
+        RcmPinProfile assigned = profile.Pins.First();
+        RcmProfileEditor.AssignPhysical(profile, assigned.Id, "J1", "A");
+
+        Assert.DoesNotContain(assigned, RcmInputFilter.Apply(profile, RcmInputFilter.Unassigned));
+        Assert.All(RcmInputFilter.Apply(profile, RcmInputFilter.Unassigned), pin =>
+            Assert.False(pin.PhysicalMappingAssigned));
+        Assert.Equal(new[] { assigned.Id }, RcmInputFilter.Apply(profile, "J1").Select(pin => pin.Id));
+    }
+
+    [Fact]
+    public void BlankConnectorOrPinRemainsUnassignedRatherThanNotTestable()
+    {
+        RcmProfile profile = EmptyProfile();
+        RcmPinProfile connectorOnly = RcmProfileEditor.AddInput(profile, new RcmInputEdit
+        {
+            Connector = "J1", Function = "Logical signal", Testable = false, RecordA = 1
+        });
+
+        Assert.False(connectorOnly.PhysicalMappingAssigned);
+        Assert.Equal(RcmResultStates.Unassigned, connectorOnly.RcmResult);
+        Assert.Equal(RcmResultStates.Unassigned, connectorOnly.DisplayKey);
+        Assert.Contains(connectorOnly, RcmInputFilter.Apply(profile, RcmInputFilter.Unassigned));
+    }
+
+    [Fact]
+    public void PhysicalAssignmentPreservesGuidLogicalMappingAndEvidence()
+    {
+        RcmProfile profile = CreateEditableProfile();
+        RcmPinProfile input = profile.Pins.Single();
+        Capture(input, RcmElectricalTestState.VoltageRemoved, 0x4A);
+        Guid id = input.Id;
+        RcmCcfReference logical = input.CcfReference!;
+        int frames = input.VoltageRemoved.FrameCount;
+
+        RcmProfileEditor.AssignPhysical(profile, id, "J2", "C");
+
+        Assert.Same(input, profile.GetInput(id));
+        Assert.Equal(id, input.Id);
+        Assert.Same(logical, input.CcfReference);
+        Assert.Equal((0, 12, 0, 0), (logical.RecordA, logical.RecordB, logical.LogicalCard, logical.LogicalChannel));
+        Assert.Equal(frames, input.VoltageRemoved.FrameCount);
+        Assert.True(input.VoltageRemoved.Tested);
+    }
+
+    [Fact]
+    public async Task SaveAndReopenPreservesPhysicalAssignmentOnSameStableInput()
+    {
+        (CcfDocument document, _) = LoadCcf();
+        RcmProfile profile = RcmProfileFactory.CreateFromCcf(document, "Class 171", FixedTime);
+        RcmPinProfile input = profile.Pins.First();
+        Guid id = input.Id;
+        RcmProfileEditor.AssignPhysical(profile, id, "J1", "A");
+        string path = TempJsonPath();
+        try
+        {
+            await RcmProfileJson.SaveAsync(path, profile, FixedTime.AddMinutes(1));
+            RcmProfile reopened = await RcmProfileJson.LoadAsync(path);
+            RcmPinProfile restored = reopened.GetInput(id);
+            Assert.Equal("J1", restored.Connector);
+            Assert.Equal("A", restored.Pin);
+            Assert.Equal(input.CcfReference!.RecordA, restored.CcfReference!.RecordA);
+            Assert.Equal(profile.Pins.Count, reopened.Pins.Count);
+        }
+        finally { DeleteIfExists(path); }
+    }
+
+    [Fact]
+    public void NextPinSuggestionNeverInventsPinsWithoutConfiguredSequence()
+    {
+        RcmProfile profile = EmptyProfile();
+        RcmProfileEditor.AddConnector(profile, "J1");
+        Assert.Null(RcmProfileEditor.SuggestNextUnusedPin(profile, "J1"));
+        Assert.Empty(profile.Pins);
+    }
+
+    [Fact]
+    public void ConfiguredConnectorSequenceSuggestsFirstUnusedPinInExactOrder()
+    {
+        RcmProfile profile = EmptyProfile();
+        RcmProfileEditor.AddConnector(profile, "J1", new[] { "A", "B", "C", "J", "b" });
+        RcmProfileEditor.AddInput(profile, new RcmInputEdit { Connector = "J1", Pin = "A" });
+        RcmProfileEditor.AddInput(profile, new RcmInputEdit { Connector = "J1", Pin = "C" });
+
+        Assert.Equal("B", RcmProfileEditor.SuggestNextUnusedPin(profile, "J1"));
+        RcmProfileEditor.SetConnectorOrderedPins(profile, "J1", new[] { "J", "b", "A" });
+        Assert.Equal("J", RcmProfileEditor.SuggestNextUnusedPin(profile, "J1"));
     }
 
     [Fact]
@@ -53,6 +161,7 @@ public sealed class RcmProfileTests
     public async Task OpenRestoresConnectorsPinsAndTestProgress()
     {
         RcmProfile profile = CreateEditableProfile();
+        RcmProfileEditor.SetConnectorOrderedPins(profile, "J1", new[] { "A", "B", "C" });
         Capture(profile.Pins.Single(), RcmElectricalTestState.VoltageRemoved, 0x4A);
         string path = TempJsonPath();
         try
@@ -60,7 +169,9 @@ public sealed class RcmProfileTests
             await RcmProfileJson.SaveAsync(path, profile, FixedTime.AddMinutes(1));
             RcmProfile reopened = await RcmProfileJson.LoadAsync(path);
 
-            Assert.Equal("J1", Assert.Single(reopened.Connectors).Name);
+            RcmConnector connector = Assert.Single(reopened.Connectors);
+            Assert.Equal("J1", connector.Name);
+            Assert.Equal(new[] { "A", "B", "C" }, connector.OrderedPins);
             RcmPinProfile restored = Assert.Single(reopened.Pins);
             Assert.Equal("A", restored.Pin);
             Assert.True(restored.VoltageRemoved.Tested);

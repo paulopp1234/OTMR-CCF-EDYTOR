@@ -59,7 +59,8 @@ public sealed class MainFormLayoutTests
                 {
                     "RCM: Class 171", "Import Pin Map...", "Refresh CCF", "New RCM Profile From CCF",
                     "Open RCM Profile", "Save RCM Profile", "Save RCM Profile As", "Add Connector",
-                    "Rename Connector", "Delete Connector", "Add Input / Pin", "Edit Selected Input",
+                    "Rename Connector", "Edit Pin Sequence", "Delete Connector", "Add Input / Pin", "Edit Selected Input",
+                    "Assign Next Pin",
                     "Delete Input / Pin", "Capture Voltage Removed", "Capture +24V Applied",
                     "Compare States", "Reset Test Evidence"
                 }) AssertVisibleText(tabs.SelectedTab!, text);
@@ -69,7 +70,12 @@ public sealed class MainFormLayoutTests
                 Find<Button>(form, "createRcmProfileButton").PerformClick();
                 Application.DoEvents();
                 Assert.NotEmpty(benchGrid.Rows.Cast<DataGridViewRow>());
-                Assert.Equal("(Unassigned)", Find<ComboBox>(form, "connectorComboBox").SelectedItem);
+                Assert.Equal(RcmInputFilter.All, Find<ComboBox>(form, "connectorComboBox").SelectedItem);
+                Assert.Equal(new[]
+                {
+                    "Connector", "Pin", "Function", "Expected CCF", "Voltage Removed", "+24V Applied",
+                    "State Difference", "Decoder", "RCM Result"
+                }, benchGrid.Columns.Cast<DataGridViewColumn>().Select(column => column.HeaderText));
 
                 ToolStripStatusLabel status = FindToolStripItem<ToolStripStatusLabel>(form, "fileStatusLabel");
                 Assert.Contains("26,600 bytes", status.Text, StringComparison.Ordinal);
@@ -137,9 +143,93 @@ public sealed class MainFormLayoutTests
             Assert.Contains("J1-L", selected.Text, StringComparison.Ordinal);
             Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
             Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
-            Assert.Equal("NOT TESTABLE", Convert.ToString(returnRow.Cells[3].Value));
+            Assert.Equal("NOT TESTABLE", Convert.ToString(returnRow.Cells["voltageRemovedColumn"].Value));
             Assert.Contains("NOT TESTABLE", Find<TextBox>(form, "evidenceTextBox").Text, StringComparison.Ordinal);
             Assert.Equal(sourceBefore, File.ReadAllBytes(ccfPath));
+        });
+    }
+
+    [Fact]
+    public void RcmGridEditsAssignExistingLogicalRowAndFiltersRemainAccurate()
+    {
+        RunInStaThread(() =>
+        {
+            string ccfPath = FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf");
+            using var form = new MainForm();
+            form.Show();
+            Application.DoEvents();
+            InvokeLoadCcf(form, ccfPath);
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            tabs.SelectedIndex = 5;
+            Application.DoEvents();
+            Find<Button>(form, "createRcmProfileButton").PerformClick();
+            Application.DoEvents();
+
+            OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
+            RcmProfile profile = GetPrivateField<RcmProfile>(bench, "_rcmProfile");
+            DataGridView grid = Find<DataGridView>(form, "rcmGrid");
+            ComboBox filter = Find<ComboBox>(form, "connectorComboBox");
+            int originalCount = profile.Pins.Count;
+            RcmPinProfile logical = profile.Pins.First();
+            Guid id = logical.Id;
+            (int? A, int? B, int? Card, int? Channel) mapping =
+                (logical.CcfReference!.RecordA, logical.CcfReference.RecordB,
+                    logical.CcfReference.LogicalCard, logical.CcfReference.LogicalChannel);
+
+            RcmProfileEditor.AddConnector(profile, "J1");
+            InvokePrivate(bench, "PopulateConnectors");
+            Application.DoEvents();
+            Assert.Equal(RcmInputFilter.All, filter.SelectedItem);
+            Assert.Equal(originalCount, grid.Rows.Count);
+
+            DataGridViewRow row = grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id));
+            grid.CurrentCell = row.Cells["connectorColumn"];
+            Assert.True(grid.BeginEdit(true));
+            Assert.IsType<DataGridViewComboBoxEditingControl>(grid.EditingControl).Text = "J1";
+            Assert.True(grid.EndEdit());
+            Application.DoEvents();
+
+            row = grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id));
+            grid.CurrentCell = row.Cells["pinColumn"];
+            Assert.True(grid.BeginEdit(true));
+            Assert.IsType<DataGridViewTextBoxEditingControl>(grid.EditingControl).Text = "A";
+            Assert.True(grid.EndEdit());
+            Application.DoEvents();
+
+            RcmPinProfile assigned = profile.GetInput(id);
+            Assert.Equal("J1", assigned.Connector);
+            Assert.Equal("A", assigned.Pin);
+            Assert.Equal(mapping, (assigned.CcfReference!.RecordA, assigned.CcfReference.RecordB,
+                assigned.CcfReference.LogicalCard, assigned.CcfReference.LogicalChannel));
+            Assert.Equal(originalCount, profile.Pins.Count);
+
+            RcmPinProfile secondLogical = profile.Pins[1];
+            row = grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, secondLogical.Id));
+            grid.CurrentCell = row.Cells["connectorColumn"];
+            Assert.True(grid.BeginEdit(true));
+            Assert.IsType<DataGridViewComboBoxEditingControl>(grid.EditingControl).Text = "J2";
+            Assert.True(grid.EndEdit());
+            Application.DoEvents();
+            row = grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, secondLogical.Id));
+            grid.CurrentCell = row.Cells["pinColumn"];
+            Assert.True(grid.BeginEdit(true));
+            Assert.IsType<DataGridViewTextBoxEditingControl>(grid.EditingControl).Text = "B";
+            Assert.True(grid.EndEdit());
+            Application.DoEvents();
+            Assert.Equal("J2", secondLogical.Connector);
+            Assert.Equal("B", secondLogical.Pin);
+            Assert.Contains(profile.Connectors, connector => connector.Name == "J2");
+
+            filter.SelectedItem = "J1";
+            Application.DoEvents();
+            Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+            filter.SelectedItem = RcmInputFilter.Unassigned;
+            Application.DoEvents();
+            Assert.Equal(originalCount - 2, grid.Rows.Count);
+            filter.SelectedItem = RcmInputFilter.All;
+            Application.DoEvents();
+            Assert.Equal(originalCount, grid.Rows.Count);
+            Assert.Contains("Assigned physical inputs: 2", Find<Label>(form, "progressLabel").Text, StringComparison.Ordinal);
         });
     }
 

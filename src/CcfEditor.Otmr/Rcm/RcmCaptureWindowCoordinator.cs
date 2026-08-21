@@ -20,6 +20,8 @@ public sealed class RcmCaptureWindowCoordinator
         ArgumentNullException.ThrowIfNull(pin);
         if (IsCapturing)
             throw new InvalidOperationException("Another RCM capture window is already active.");
+        if (!pin.PhysicalMappingAssigned)
+            throw new InvalidOperationException("Assign both Connector and Pin before voltage capture.");
         if (!pin.Testable)
             throw new InvalidOperationException($"{pin.DisplayKey} is not a voltage-testable input.");
 
@@ -86,11 +88,13 @@ public sealed class RcmCaptureWindowCoordinator
         pin.VoltageRemoved = new RcmStateEvidence();
         pin.VoltageApplied24V = new RcmStateEvidence();
         pin.Comparison = new RcmStateComparison();
-        pin.RcmResult = pin.Testable ? RcmResultStates.NotTested : RcmResultStates.NotTestable;
+        pin.RcmResult = ResultForCapturedStates(pin);
     }
 
     public static string ResultForCapturedStates(RcmPinProfile pin)
     {
+        if (!pin.PhysicalMappingAssigned)
+            return RcmResultStates.Unassigned;
         if (!pin.Testable)
             return RcmResultStates.NotTestable;
         if (pin.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested)
