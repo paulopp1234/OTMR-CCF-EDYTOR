@@ -24,6 +24,17 @@ partial class OtmrLiveControl
     private Button disconnectButton = null!;
     private Label liveStateLabel = null!;
     private Label safetyLabel = null!;
+    private GroupBox databaseRecordingGroupBox = null!;
+    private TableLayoutPanel databaseRecordingLayout = null!;
+    private FlowLayoutPanel databaseButtonsPanel = null!;
+    private Button startDatabaseRecordingButton = null!;
+    private Button stopDatabaseRecordingButton = null!;
+    private Button openDatabaseFolderButton = null!;
+    private Label databaseRecordingStateLabel = null!;
+    private Label databaseSessionLabel = null!;
+    private Label databaseCountsLabel = null!;
+    private Label databasePathLabel = null!;
+    private Label databaseMessageLabel = null!;
     private GroupBox captureGroupBox = null!;
     private DataGridView captureGrid = null!;
     private DataGridViewTextBoxColumn timeColumn = null!;
@@ -68,6 +79,17 @@ partial class OtmrLiveControl
         disconnectButton = new Button();
         liveStateLabel = new Label();
         safetyLabel = new Label();
+        databaseRecordingGroupBox = new GroupBox();
+        databaseRecordingLayout = new TableLayoutPanel();
+        databaseButtonsPanel = new FlowLayoutPanel();
+        startDatabaseRecordingButton = new Button();
+        stopDatabaseRecordingButton = new Button();
+        openDatabaseFolderButton = new Button();
+        databaseRecordingStateLabel = new Label();
+        databaseSessionLabel = new Label();
+        databaseCountsLabel = new Label();
+        databasePathLabel = new Label();
+        databaseMessageLabel = new Label();
         captureGroupBox = new GroupBox();
         captureGrid = new DataGridView();
         timeColumn = new DataGridViewTextBoxColumn();
@@ -85,6 +107,9 @@ partial class OtmrLiveControl
         rootLayout.SuspendLayout();
         connectionGroupBox.SuspendLayout();
         connectionLayout.SuspendLayout();
+        databaseRecordingGroupBox.SuspendLayout();
+        databaseRecordingLayout.SuspendLayout();
+        databaseButtonsPanel.SuspendLayout();
         captureGroupBox.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)captureGrid).BeginInit();
         captureButtonsPanel.SuspendLayout();
@@ -95,14 +120,16 @@ partial class OtmrLiveControl
         rootLayout.ColumnCount = 1;
         rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         rootLayout.Controls.Add(connectionGroupBox, 0, 0);
-        rootLayout.Controls.Add(captureGroupBox, 0, 1);
-        rootLayout.Controls.Add(statusLabel, 0, 2);
+        rootLayout.Controls.Add(databaseRecordingGroupBox, 0, 1);
+        rootLayout.Controls.Add(captureGroupBox, 0, 2);
+        rootLayout.Controls.Add(statusLabel, 0, 3);
         rootLayout.Dock = DockStyle.Fill;
         rootLayout.Location = new Point(0, 0);
         rootLayout.Name = "rootLayout";
         rootLayout.Padding = new Padding(8);
-        rootLayout.RowCount = 3;
+        rootLayout.RowCount = 4;
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 170F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
         rootLayout.Size = new Size(1200, 700);
@@ -216,6 +243,79 @@ partial class OtmrLiveControl
         safetyLabel.Text = "SAFETY: Connect sends nothing. Start OTMR Live is an explicit confirmed action using the proven 01 01 query and evidence-backed CANDIDATE 01 07 Arrowvale sequence. No CCF, captured 0x10B configuration block, programming data, replay, or unknown command is transmitted.";
         safetyLabel.TextAlign = ContentAlignment.MiddleLeft;
         // 
+        // databaseRecordingGroupBox
+        // 
+        databaseRecordingGroupBox.Controls.Add(databaseRecordingLayout);
+        databaseRecordingGroupBox.Dock = DockStyle.Fill;
+        databaseRecordingGroupBox.Name = "databaseRecordingGroupBox";
+        databaseRecordingGroupBox.Padding = new Padding(8);
+        databaseRecordingGroupBox.Text = "Local SQLite data recording — capture/history storage only; RCM JSON remains configuration";
+        // 
+        // databaseRecordingLayout
+        // 
+        databaseRecordingLayout.ColumnCount = 2;
+        databaseRecordingLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60F));
+        databaseRecordingLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F));
+        databaseRecordingLayout.Controls.Add(databaseButtonsPanel, 0, 0);
+        databaseRecordingLayout.Controls.Add(databaseRecordingStateLabel, 1, 0);
+        databaseRecordingLayout.Controls.Add(databaseSessionLabel, 0, 1);
+        databaseRecordingLayout.Controls.Add(databaseCountsLabel, 1, 1);
+        databaseRecordingLayout.Controls.Add(databasePathLabel, 0, 2);
+        databaseRecordingLayout.Controls.Add(databaseMessageLabel, 1, 2);
+        databaseRecordingLayout.Dock = DockStyle.Fill;
+        databaseRecordingLayout.Name = "databaseRecordingLayout";
+        databaseRecordingLayout.RowCount = 3;
+        databaseRecordingLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+        databaseRecordingLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
+        databaseRecordingLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        // 
+        // databaseButtonsPanel
+        // 
+        databaseButtonsPanel.Controls.Add(startDatabaseRecordingButton);
+        databaseButtonsPanel.Controls.Add(stopDatabaseRecordingButton);
+        databaseButtonsPanel.Controls.Add(openDatabaseFolderButton);
+        databaseButtonsPanel.Dock = DockStyle.Fill;
+        databaseButtonsPanel.Name = "databaseButtonsPanel";
+        databaseButtonsPanel.WrapContents = false;
+        startDatabaseRecordingButton.AutoSize = true;
+        startDatabaseRecordingButton.Name = "startDatabaseRecordingButton";
+        startDatabaseRecordingButton.Text = "Start Recording";
+        startDatabaseRecordingButton.Click += StartDatabaseRecordingButton_Click;
+        stopDatabaseRecordingButton.AutoSize = true;
+        stopDatabaseRecordingButton.Enabled = false;
+        stopDatabaseRecordingButton.Name = "stopDatabaseRecordingButton";
+        stopDatabaseRecordingButton.Text = "Stop Recording";
+        stopDatabaseRecordingButton.Click += StopDatabaseRecordingButton_Click;
+        openDatabaseFolderButton.AutoSize = true;
+        openDatabaseFolderButton.Name = "openDatabaseFolderButton";
+        openDatabaseFolderButton.Text = "Open Database Folder";
+        openDatabaseFolderButton.Click += OpenDatabaseFolderButton_Click;
+        databaseRecordingStateLabel.Dock = DockStyle.Fill;
+        databaseRecordingStateLabel.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        databaseRecordingStateLabel.Name = "databaseRecordingStateLabel";
+        databaseRecordingStateLabel.Text = "STOPPED";
+        databaseRecordingStateLabel.TextAlign = ContentAlignment.MiddleRight;
+        databaseSessionLabel.AutoEllipsis = true;
+        databaseSessionLabel.Dock = DockStyle.Fill;
+        databaseSessionLabel.Name = "databaseSessionLabel";
+        databaseSessionLabel.Text = "Session: -";
+        databaseSessionLabel.TextAlign = ContentAlignment.MiddleLeft;
+        databaseCountsLabel.AutoEllipsis = true;
+        databaseCountsLabel.Dock = DockStyle.Fill;
+        databaseCountsLabel.Name = "databaseCountsLabel";
+        databaseCountsLabel.Text = "Raw entries: 0 | Complete frames: 0";
+        databaseCountsLabel.TextAlign = ContentAlignment.MiddleRight;
+        databasePathLabel.AutoEllipsis = true;
+        databasePathLabel.Dock = DockStyle.Fill;
+        databasePathLabel.Name = "databasePathLabel";
+        databasePathLabel.Text = "Database path";
+        databasePathLabel.TextAlign = ContentAlignment.MiddleLeft;
+        databaseMessageLabel.AutoEllipsis = true;
+        databaseMessageLabel.Dock = DockStyle.Fill;
+        databaseMessageLabel.Name = "databaseMessageLabel";
+        databaseMessageLabel.Text = "Stopped. Start Recording before the OTMR sequence if you want every TX/RX byte retained.";
+        databaseMessageLabel.TextAlign = ContentAlignment.MiddleRight;
+        // 
         // captureGroupBox
         // 
         captureGroupBox.Controls.Add(captureGrid);
@@ -268,37 +368,22 @@ partial class OtmrLiveControl
         captureButtonsPanel.Height = 38;
         captureButtonsPanel.Name = "captureButtonsPanel";
         captureButtonsPanel.Padding = new Padding(0, 6, 0, 0);
-        // 
-        // clearCaptureButton
-        // 
         clearCaptureButton.AutoSize = true;
         clearCaptureButton.Name = "clearCaptureButton";
         clearCaptureButton.Text = "Clear";
         clearCaptureButton.Click += ClearCaptureButton_Click;
-        // 
-        // saveCaptureButton
-        // 
         saveCaptureButton.AutoSize = true;
         saveCaptureButton.Name = "saveCaptureButton";
         saveCaptureButton.Text = "Save Capture";
         saveCaptureButton.Click += SaveCaptureButton_Click;
-        // 
-        // copyHexButton
-        // 
         copyHexButton.AutoSize = true;
         copyHexButton.Name = "copyHexButton";
         copyHexButton.Text = "Copy Hex";
         copyHexButton.Click += CopyHexButton_Click;
-        // 
-        // filterLabel
-        // 
         filterLabel.AutoSize = true;
         filterLabel.Margin = new Padding(18, 7, 3, 0);
         filterLabel.Name = "filterLabel";
         filterLabel.Text = "Show:";
-        // 
-        // captureFilterComboBox
-        // 
         captureFilterComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
         captureFilterComboBox.FormattingEnabled = true;
         captureFilterComboBox.Items.AddRange(new object[] { "All", "RX", "TX" });
@@ -306,9 +391,6 @@ partial class OtmrLiveControl
         captureFilterComboBox.Size = new Size(75, 23);
         captureFilterComboBox.SelectedIndex = 0;
         captureFilterComboBox.SelectedIndexChanged += CaptureFilterComboBox_SelectedIndexChanged;
-        // 
-        // captureCountLabel
-        // 
         captureCountLabel.AutoSize = true;
         captureCountLabel.Margin = new Padding(16, 7, 3, 0);
         captureCountLabel.Name = "captureCountLabel";
@@ -330,10 +412,15 @@ partial class OtmrLiveControl
         Size = new Size(1200, 700);
         connectionLayout.ResumeLayout(true);
         connectionLayout.PerformLayout();
+        connectionGroupBox.ResumeLayout(true);
+        databaseButtonsPanel.ResumeLayout(true);
+        databaseButtonsPanel.PerformLayout();
+        databaseRecordingLayout.ResumeLayout(true);
+        databaseRecordingLayout.PerformLayout();
+        databaseRecordingGroupBox.ResumeLayout(true);
         ((System.ComponentModel.ISupportInitialize)captureGrid).EndInit();
         captureButtonsPanel.ResumeLayout(true);
         captureButtonsPanel.PerformLayout();
-        connectionGroupBox.ResumeLayout(true);
         captureGroupBox.ResumeLayout(true);
         rootLayout.ResumeLayout(true);
         ResumeLayout(true);
