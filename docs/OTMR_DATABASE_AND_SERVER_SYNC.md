@@ -4,7 +4,7 @@
 
 - **CCF** = logical OTMR configuration.
 - **RCM JSON** = editable RCM/physical test definition.
-- **SQLite (`OTMR_RCM.db`)** = captured data, RCM test data, history, and the upload queue.
+- **SQLite (`C:\OTMR_RCM\OTMR_RCM.db`)** = captured data, RCM test data, history, and the upload queue.
 - **Future PostgreSQL server** = permanent shared online history used by the Windows application and later Android application.
 
 SQLite does not replace the RCM JSON. A recording session stores the JSON filename, SHA-256 and an immutable JSON snapshot so historical data can always be tied back to the exact test definition that produced it.
@@ -26,7 +26,7 @@ While recording is active the database stores:
 
 Raw bytes are stored as SQLite **BLOBs**, not only as display hex strings.
 
-The runtime database is stored under the current Windows user's Local Application Data folder and is ignored by Git.
+The RCM/database development version is rooted at `C:\OTMR_RCM`; the runtime database is `C:\OTMR_RCM\OTMR_RCM.db`. Database runtime files (`*.db`, `*.db-wal`, `*.db-shm`) are ignored by Git.
 
 ## Offline-first behaviour
 
