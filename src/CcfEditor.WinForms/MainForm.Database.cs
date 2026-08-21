@@ -6,15 +6,18 @@ namespace CcfEditor.WinForms;
 public partial class MainForm
 {
     private SqliteOtmrRecordingStore? _recordingStore;
+    private bool _databaseTabLayoutHookInstalled;
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
 
-        // The bench OnLoad event can run while the form is still receiving its
-        // final dimensions. Correct its intended initial split once now that the
-        // host form is actually shown.
-        otmrBenchControl.ApplyFinalInitialLayout();
+        if (!_databaseTabLayoutHookInstalled)
+        {
+            tabs.SelectedIndexChanged += DatabaseTabs_SelectedIndexChanged;
+            _databaseTabLayoutHookInstalled = true;
+        }
+        DatabaseTabs_SelectedIndexChanged(tabs, EventArgs.Empty);
 
         if (_recordingStore is not null)
             return;
@@ -26,8 +29,7 @@ public partial class MainForm
 
             // Finish initialization/version checking/recovery before OnShown returns.
             // This prevents an async initialization continuation from racing form
-            // disposal during startup/tests and guarantees the controls only receive
-            // a recording store after it is ready.
+            // disposal and guarantees controls only receive a ready recording store.
             store.InitializeAsync().GetAwaiter().GetResult();
 
             _recordingStore = store;
@@ -53,6 +55,12 @@ public partial class MainForm
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
+    }
+
+    private void DatabaseTabs_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        if (ReferenceEquals(tabs.SelectedTab, otmrBenchTab))
+            otmrBenchControl.ScheduleFinalInitialLayout();
     }
 
     internal OtmrRecordingSessionContext CreateRecordingSessionContext(string comPort)
@@ -87,6 +95,12 @@ public partial class MainForm
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        if (_databaseTabLayoutHookInstalled)
+        {
+            tabs.SelectedIndexChanged -= DatabaseTabs_SelectedIndexChanged;
+            _databaseTabLayoutHookInstalled = false;
+        }
+
         try
         {
             _recordingStore?.DisposeAsync().AsTask().GetAwaiter().GetResult();
