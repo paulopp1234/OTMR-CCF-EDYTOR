@@ -347,7 +347,11 @@ partial class MainForm
         detailsTable.Dock = DockStyle.Fill;
         detailsTable.Padding = new Padding(8);
         detailsTable.RowCount = 5;
-        for (int i = 0; i < 5; i++) detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
         recordLabel.Dock = DockStyle.Fill; recordLabel.Text = "Record / event"; recordLabel.TextAlign = ContentAlignment.MiddleLeft;
         typeLabel.Dock = DockStyle.Fill; typeLabel.Text = "Type / flag"; typeLabel.TextAlign = ContentAlignment.MiddleLeft;
         nameLabel.Dock = DockStyle.Fill; nameLabel.Text = "Name"; nameLabel.TextAlign = ContentAlignment.MiddleLeft;
