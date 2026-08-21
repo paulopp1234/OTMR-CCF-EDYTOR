@@ -8,7 +8,7 @@
     <Version>0.2.0</Version>
     <AssemblyVersion>0.2.0.0</AssemblyVersion>
     <FileVersion>0.2.0.0</FileVersion>
-    <InformationalVersion>v0.2-test-m1</InformationalVersion>
+    <InformationalVersion>v0.2-test-m1-bench</InformationalVersion>
     <Product>OTMR CCF Editor / Creator</Product>
   </PropertyGroup>
 
@@ -30,6 +30,12 @@
     <Compile Update="OtmrLiveControl.Designer.cs">
       <DependentUpon>OtmrLiveControl.cs</DependentUpon>
     </Compile>
+    <Compile Update="OtmrBenchControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Update="OtmrBenchControl.Designer.cs">
+      <DependentUpon>OtmrBenchControl.cs</DependentUpon>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup>
@@ -39,6 +45,15 @@
     <EmbeddedResource Update="OtmrLiveControl.resx">
       <DependentUpon>OtmrLiveControl.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Update="OtmrBenchControl.resx">
+      <DependentUpon>OtmrBenchControl.cs</DependentUpon>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Profiles\Class171\Class171_Bench_PinMap.tsv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
