@@ -25,7 +25,9 @@ partial class MainForm
     private TabPage hexTab = null!;
     private TabPage validationTab = null!;
     private TabPage otmrLiveTab = null!;
+    private TabPage otmrBenchTab = null!;
     private OtmrLiveControl otmrLiveControl = null!;
+    private OtmrBenchControl otmrBenchControl = null!;
     private SplitContainer recordsSplit = null!;
     private TableLayoutPanel recordsTopTable = null!;
     private DataGridView recordsGrid = null!;
@@ -165,6 +167,8 @@ partial class MainForm
         validationMessageColumn = new ColumnHeader();
         otmrLiveTab = new TabPage();
         otmrLiveControl = new OtmrLiveControl();
+        otmrBenchTab = new TabPage();
+        otmrBenchControl = new OtmrBenchControl();
 
         menuStrip.SuspendLayout();
         toolStrip.SuspendLayout();
@@ -185,6 +189,7 @@ partial class MainForm
         ((System.ComponentModel.ISupportInitialize)hexGrid).BeginInit();
         validationTab.SuspendLayout();
         otmrLiveTab.SuspendLayout();
+        otmrBenchTab.SuspendLayout();
         SuspendLayout();
 
         menuStrip.Items.AddRange(new ToolStripItem[] { fileMenu });
@@ -195,18 +200,15 @@ partial class MainForm
         fileMenu.DropDownItems.AddRange(new ToolStripItem[] { openMenuItem, saveCopyMenuItem, new ToolStripSeparator(), exitMenuItem });
         fileMenu.Name = "fileMenu";
         fileMenu.Text = "&File";
-
         openMenuItem.Name = "openMenuItem";
         openMenuItem.ShortcutKeys = Keys.Control | Keys.O;
         openMenuItem.Text = "&Open CCF...";
         openMenuItem.Click += OpenMenuItem_Click;
-
         saveCopyMenuItem.Enabled = false;
         saveCopyMenuItem.Name = "saveCopyMenuItem";
         saveCopyMenuItem.ShortcutKeys = Keys.Control | Keys.Shift | Keys.S;
         saveCopyMenuItem.Text = "Save CCF &As...";
         saveCopyMenuItem.Click += SaveCopyMenuItem_Click;
-
         exitMenuItem.Name = "exitMenuItem";
         exitMenuItem.Text = "E&xit";
         exitMenuItem.Click += ExitMenuItem_Click;
@@ -215,24 +217,20 @@ partial class MainForm
         toolStrip.Location = new Point(0, 24);
         toolStrip.Name = "toolStrip";
         toolStrip.Size = new Size(1500, 25);
-
         openButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
         openButton.Name = "openButton";
         openButton.Text = "Open CCF";
         openButton.Click += OpenMenuItem_Click;
-
         saveCopyButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
         saveCopyButton.Enabled = false;
         saveCopyButton.Name = "saveCopyButton";
         saveCopyButton.Text = "Save CCF As";
         saveCopyButton.Click += SaveCopyMenuItem_Click;
-
         searchLabel.Name = "searchLabel";
         searchLabel.Text = "Search:";
         searchTextBox.Name = "searchTextBox";
         searchTextBox.Size = new Size(260, 25);
         searchTextBox.TextChanged += SearchTextBox_TextChanged;
-
         jumpToPairButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
         jumpToPairButton.Enabled = false;
         jumpToPairButton.Name = "jumpToPairButton";
@@ -244,7 +242,7 @@ partial class MainForm
         statusStrip.Name = "statusStrip";
         statusStrip.Size = new Size(1500, 22);
         fileStatusLabel.Name = "fileStatusLabel";
-        fileStatusLabel.Text = "No CCF loaded | v0.2 test / OTMR M1";
+        fileStatusLabel.Text = "No CCF loaded | v0.2 test / OTMR M1 + I/O Bench";
         springStatusLabel.Name = "springStatusLabel";
         springStatusLabel.Spring = true;
         shaStatusLabel.Name = "shaStatusLabel";
@@ -255,6 +253,7 @@ partial class MainForm
         tabs.Controls.Add(hexTab);
         tabs.Controls.Add(validationTab);
         tabs.Controls.Add(otmrLiveTab);
+        tabs.Controls.Add(otmrBenchTab);
         tabs.Dock = DockStyle.Fill;
         tabs.Location = new Point(0, 49);
         tabs.Name = "tabs";
@@ -262,20 +261,16 @@ partial class MainForm
         tabs.Size = new Size(1500, 829);
 
         recordsTab.Controls.Add(recordsSplit);
-        recordsTab.Location = new Point(4, 24);
         recordsTab.Name = "recordsTab";
         recordsTab.Padding = new Padding(3);
         recordsTab.Text = "Records - edit known fields in grid";
         recordsTab.UseVisualStyleBackColor = true;
-
         recordsSplit.Dock = DockStyle.Fill;
-        recordsSplit.Location = new Point(3, 3);
         recordsSplit.Name = "recordsSplit";
         recordsSplit.Orientation = Orientation.Horizontal;
         recordsSplit.Panel1.Controls.Add(recordsTopTable);
         recordsSplit.Panel2.Controls.Add(detailsTable);
         recordsSplit.SplitterDistance = 520;
-
         recordsTopTable.ColumnCount = 2;
         recordsTopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         recordsTopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 420F));
@@ -303,7 +298,6 @@ partial class MainForm
         recordsGrid.CellValidating += RecordsGrid_CellValidating;
         recordsGrid.DataError += RecordsGrid_DataError;
         recordsGrid.SelectionChanged += RecordsGrid_SelectionChanged;
-
         recordColumn.DataPropertyName = "Record"; recordColumn.HeaderText = "Record"; recordColumn.Name = "recordColumn"; recordColumn.ReadOnly = true; recordColumn.Width = 65;
         eventColumn.DataPropertyName = "EventIndex"; eventColumn.HeaderText = "Event"; eventColumn.Name = "eventColumn"; eventColumn.ReadOnly = true; eventColumn.Width = 65;
         typeColumn.DataPropertyName = "Type"; typeColumn.HeaderText = "Type*"; typeColumn.Name = "typeColumn"; typeColumn.Width = 50;
@@ -353,12 +347,7 @@ partial class MainForm
         detailsTable.Dock = DockStyle.Fill;
         detailsTable.Padding = new Padding(8);
         detailsTable.RowCount = 5;
-        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
-        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
-        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
-        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
-        detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
-
+        for (int i = 0; i < 5; i++) detailsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
         recordLabel.Dock = DockStyle.Fill; recordLabel.Text = "Record / event"; recordLabel.TextAlign = ContentAlignment.MiddleLeft;
         typeLabel.Dock = DockStyle.Fill; typeLabel.Text = "Type / flag"; typeLabel.TextAlign = ContentAlignment.MiddleLeft;
         nameLabel.Dock = DockStyle.Fill; nameLabel.Text = "Name"; nameLabel.TextAlign = ContentAlignment.MiddleLeft;
@@ -369,7 +358,6 @@ partial class MainForm
         onLabel.Dock = DockStyle.Fill; onLabel.Text = "ON text"; onLabel.TextAlign = ContentAlignment.MiddleLeft;
         offsetLabel.Dock = DockStyle.Fill; offsetLabel.Text = "Record offset"; offsetLabel.TextAlign = ContentAlignment.MiddleLeft;
         rawLabel.Dock = DockStyle.Fill; rawLabel.Text = "Raw record bytes"; rawLabel.TextAlign = ContentAlignment.MiddleLeft;
-
         detailRecordTextBox.Dock = DockStyle.Fill; detailRecordTextBox.ReadOnly = true;
         detailTypeTextBox.Dock = DockStyle.Fill; detailTypeTextBox.ReadOnly = true;
         detailNameTextBox.Dock = DockStyle.Fill; detailNameTextBox.ReadOnly = true;
@@ -382,7 +370,6 @@ partial class MainForm
         detailRawTextBox.Dock = DockStyle.Fill; detailRawTextBox.Font = new Font("Consolas", 9F); detailRawTextBox.ReadOnly = true; detailRawTextBox.WordWrap = false;
 
         headerTab.Controls.Add(headerGrid);
-        headerTab.Location = new Point(4, 24);
         headerTab.Name = "headerTab";
         headerTab.Padding = new Padding(3);
         headerTab.Text = "Header - edit supported Decoded cells";
@@ -407,7 +394,6 @@ partial class MainForm
         headerEditableColumn.DataPropertyName = "Editable"; headerEditableColumn.HeaderText = "Editable"; headerEditableColumn.Name = "headerEditableColumn"; headerEditableColumn.ReadOnly = true; headerEditableColumn.Width = 65;
 
         hexTab.Controls.Add(hexGrid);
-        hexTab.Location = new Point(4, 24);
         hexTab.Name = "hexTab";
         hexTab.Padding = new Padding(3);
         hexTab.Text = "Hex";
@@ -428,7 +414,6 @@ partial class MainForm
         hexAsciiColumn.DataPropertyName = "Ascii"; hexAsciiColumn.HeaderText = "ASCII"; hexAsciiColumn.Name = "hexAsciiColumn"; hexAsciiColumn.ReadOnly = true; hexAsciiColumn.Width = 220;
 
         validationTab.Controls.Add(validationList);
-        validationTab.Location = new Point(4, 24);
         validationTab.Name = "validationTab";
         validationTab.Padding = new Padding(3);
         validationTab.Text = "Validation";
@@ -443,7 +428,6 @@ partial class MainForm
         validationMessageColumn.Text = "Message"; validationMessageColumn.Width = 1200;
 
         otmrLiveTab.Controls.Add(otmrLiveControl);
-        otmrLiveTab.Location = new Point(4, 24);
         otmrLiveTab.Name = "otmrLiveTab";
         otmrLiveTab.Padding = new Padding(3);
         otmrLiveTab.Text = "OTMR Live - M1";
@@ -451,7 +435,15 @@ partial class MainForm
         otmrLiveControl.Dock = DockStyle.Fill;
         otmrLiveControl.Location = new Point(3, 3);
         otmrLiveControl.Name = "otmrLiveControl";
-        otmrLiveControl.Size = new Size(1486, 795);
+
+        otmrBenchTab.Controls.Add(otmrBenchControl);
+        otmrBenchTab.Name = "otmrBenchTab";
+        otmrBenchTab.Padding = new Padding(3);
+        otmrBenchTab.Text = "OTMR I/O Bench";
+        otmrBenchTab.UseVisualStyleBackColor = true;
+        otmrBenchControl.Dock = DockStyle.Fill;
+        otmrBenchControl.Location = new Point(3, 3);
+        otmrBenchControl.Name = "otmrBenchControl";
 
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
@@ -464,7 +456,7 @@ partial class MainForm
         MinimumSize = new Size(1100, 700);
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "OTMR CCF Editor / Creator v0.2 - test OTMR M1";
+        Text = "OTMR CCF Editor / Creator v0.2 - test OTMR M1 + I/O Bench";
         FormClosing += MainForm_FormClosing;
 
         menuStrip.ResumeLayout(false); menuStrip.PerformLayout();
@@ -482,6 +474,7 @@ partial class MainForm
         hexTab.ResumeLayout(false); ((System.ComponentModel.ISupportInitialize)hexGrid).EndInit();
         validationTab.ResumeLayout(false);
         otmrLiveTab.ResumeLayout(false);
+        otmrBenchTab.ResumeLayout(false);
         ResumeLayout(false);
         PerformLayout();
     }
