@@ -117,29 +117,32 @@ public sealed class OtmrRecordingReliabilityTests
                 ComPort = "COM8"
             });
 
-            await using var blocker = new SqliteConnection($"Data Source={path}");
-            await blocker.OpenAsync();
-            await using (SqliteCommand begin = blocker.CreateCommand())
-            {
-                begin.CommandText = "PRAGMA busy_timeout=100; BEGIN IMMEDIATE;";
-                await begin.ExecuteNonQueryAsync();
-            }
-
             byte[] expected = { 0x01, 0x07, 0xAA, 0x55 };
-            store.TryRecordRaw(new OtmrCaptureEntry(DateTimeOffset.UtcNow, OtmrDirection.Tx, expected));
-            Task stopTask = store.StopSessionAsync(DateTimeOffset.UtcNow);
-
-            // The recording store uses a 5-second SQLite busy timeout. Hold the
-            // writer lock long enough to force at least one failed write attempt.
-            await Task.Delay(TimeSpan.FromMilliseconds(5400));
-            Assert.StartsWith("LOCAL_DB_RETRY_", store.GetStatus().SyncState);
-
-            await using (SqliteCommand commit = blocker.CreateCommand())
+            Task stopTask;
+            await using (var blocker = new SqliteConnection($"Data Source={path}"))
             {
+                await blocker.OpenAsync();
+                await using (SqliteCommand begin = blocker.CreateCommand())
+                {
+                    begin.CommandText = "PRAGMA busy_timeout=100; BEGIN IMMEDIATE;";
+                    await begin.ExecuteNonQueryAsync();
+                }
+
+                store.TryRecordRaw(new OtmrCaptureEntry(DateTimeOffset.UtcNow, OtmrDirection.Tx, expected));
+                stopTask = store.StopSessionAsync(DateTimeOffset.UtcNow);
+
+                // The recording store uses a 5-second SQLite busy timeout. Hold the
+                // writer lock long enough to force at least one failed write attempt.
+                await Task.Delay(TimeSpan.FromMilliseconds(5400));
+                Assert.StartsWith("LOCAL_DB_RETRY_", store.GetStatus().SyncState);
+
+                await using SqliteCommand commit = blocker.CreateCommand();
                 commit.CommandText = "COMMIT;";
                 await commit.ExecuteNonQueryAsync();
             }
 
+            // The competing connection is disposed before waiting for the writer,
+            // so Windows cannot retain an avoidable SQLite file handle in cleanup.
             await stopTask.WaitAsync(TimeSpan.FromSeconds(15));
 
             OtmrSessionUploadPackage package = await store.BuildUploadPackageAsync(sessionId);
@@ -254,8 +257,22 @@ public sealed class OtmrRecordingReliabilityTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (Directory.Exists(folder))
-                Directory.Delete(folder, recursive: true);
+            for (int attempt = 0; attempt < 6; attempt++)
+            {
+                try
+                {
+                    if (Directory.Exists(folder))
+                        Directory.Delete(folder, recursive: true);
+                    break;
+                }
+                catch (IOException) when (attempt < 5)
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    SqliteConnection.ClearAllPools();
+                    await Task.Delay(100);
+                }
+            }
         }
     }
 }
