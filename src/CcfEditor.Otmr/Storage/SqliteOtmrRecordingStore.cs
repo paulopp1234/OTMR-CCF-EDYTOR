@@ -9,14 +9,18 @@ namespace CcfEditor.Otmr.Storage;
 
 public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 {
+    public const int CurrentSchemaVersion = 1;
+
     private readonly Channel<DbWorkItem> _writeQueue = Channel.CreateUnbounded<DbWorkItem>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly SemaphoreSlim _initializationGate = new(1, 1);
     private readonly object _stateSync = new();
     private readonly Task _writerTask;
     private Guid? _activeSessionId;
     private bool _isRecording;
     private bool _disposed;
+    private bool _databaseInitialized;
     private long _rawSequence;
     private long _frameSequence;
     private long _rawCount;
@@ -67,6 +71,12 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 DatabasePath,
                 _syncState);
         }
+    }
+
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<Guid> StartSessionAsync(
@@ -152,45 +162,53 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 sessionId = _activeSessionId;
                 if (!_isRecording || sessionId is null)
                     return;
+                // Stop accepting new serial callbacks before placing the flush barrier.
                 _isRecording = false;
+                _syncState = "FLUSHING_LOCAL_DATA";
             }
+            RaiseStatusChanged();
 
             await FlushQueueAsync(cancellationToken).ConfigureAwait(false);
             await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
 
             Guid outboxId = Guid.NewGuid();
-            await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            using SqliteTransaction transaction = connection.BeginTransaction();
-
-            await using (SqliteCommand update = connection.CreateCommand())
+            await using (SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
             {
-                update.Transaction = transaction;
-                update.CommandText = """
-                    UPDATE recording_sessions
-                    SET finished_utc = $finishedUtc,
-                        sync_state = 'PENDING_UPLOAD'
-                    WHERE session_id = $sessionId;
-                    """;
-                update.Parameters.AddWithValue("$finishedUtc", UtcText(stoppedAtUtc));
-                update.Parameters.AddWithValue("$sessionId", sessionId.Value.ToString("D"));
-                await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
+                using SqliteTransaction transaction = connection.BeginTransaction();
 
-            await using (SqliteCommand outbox = connection.CreateCommand())
-            {
-                outbox.Transaction = transaction;
-                outbox.CommandText = """
-                    INSERT INTO sync_outbox (
-                        outbox_id, session_id, entity_type, state, created_utc, attempt_count)
-                    VALUES ($outboxId, $sessionId, 'recording_session', 'PENDING', $createdUtc, 0);
-                    """;
-                outbox.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
-                outbox.Parameters.AddWithValue("$sessionId", sessionId.Value.ToString("D"));
-                outbox.Parameters.AddWithValue("$createdUtc", UtcText(DateTimeOffset.UtcNow));
-                await outbox.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
+                await using (SqliteCommand update = connection.CreateCommand())
+                {
+                    update.Transaction = transaction;
+                    update.CommandText = """
+                        UPDATE recording_sessions
+                        SET finished_utc = $finishedUtc,
+                            sync_state = 'PENDING_UPLOAD'
+                        WHERE session_id = $sessionId;
+                        """;
+                    update.Parameters.AddWithValue("$finishedUtc", UtcText(stoppedAtUtc));
+                    update.Parameters.AddWithValue("$sessionId", sessionId.Value.ToString("D"));
+                    await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
 
-            transaction.Commit();
+                await using (SqliteCommand outbox = connection.CreateCommand())
+                {
+                    outbox.Transaction = transaction;
+                    outbox.CommandText = """
+                        INSERT INTO sync_outbox (
+                            outbox_id, session_id, entity_type, state, created_utc, attempt_count)
+                        SELECT $outboxId, $sessionId, 'recording_session', 'PENDING', $createdUtc, 0
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM sync_outbox
+                            WHERE session_id = $sessionId AND state IN ('PENDING', 'UPLOADED'));
+                        """;
+                    outbox.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
+                    outbox.Parameters.AddWithValue("$sessionId", sessionId.Value.ToString("D"));
+                    outbox.Parameters.AddWithValue("$createdUtc", UtcText(DateTimeOffset.UtcNow));
+                    await outbox.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                transaction.Commit();
+            }
 
             lock (_stateSync)
             {
@@ -198,6 +216,28 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 _syncState = "PENDING_UPLOAD";
             }
             RaiseStatusChanged();
+
+            try
+            {
+                await CheckpointWalAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                lock (_stateSync)
+                    _syncState = "PENDING_UPLOAD_WAL_CHECKPOINT_ERROR";
+                RaiseStatusChanged();
+                throw;
+            }
+        }
+        catch
+        {
+            lock (_stateSync)
+            {
+                if (_activeSessionId is not null && !_isRecording)
+                    _syncState = "LOCAL_DB_ERROR";
+            }
+            RaiseStatusChanged();
+            throw;
         }
         finally
         {
@@ -214,7 +254,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 
         long sequence = Interlocked.Increment(ref _rawSequence);
         byte[] data = entry.GetDataSnapshot();
-        if (_writeQueue.Writer.TryWrite(new RawEntryWorkItem(
+        if (TryQueue(new RawEntryWorkItem(
                 sessionId.Value,
                 sequence,
                 entry.Timestamp.ToUniversalTime(),
@@ -235,7 +275,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
             return;
 
         long sequence = Interlocked.Increment(ref _frameSequence);
-        if (_writeQueue.Writer.TryWrite(new LiveFrameWorkItem(
+        if (TryQueue(new LiveFrameWorkItem(
                 sessionId.Value,
                 sequence,
                 timestamp.ToUniversalTime(),
@@ -261,7 +301,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 frame.Timestamp.ToUniversalTime(),
                 frame.RawFrameBytes.Select(value => checked((byte)value)).ToArray()))
             .ToArray();
-        _writeQueue.Writer.TryWrite(new RcmCaptureWorkItem(
+        TryQueue(new RcmCaptureWorkItem(
             sessionId.Value,
             snapshot,
             state.ToString(),
@@ -280,7 +320,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
             return;
 
         var snapshot = RcmInputSnapshot.From(pin);
-        _writeQueue.Writer.TryWrite(new RcmComparisonWorkItem(
+        TryQueue(new RcmComparisonWorkItem(
             sessionId.Value,
             snapshot,
             pin.Comparison.ComparedAt?.ToUniversalTime(),
@@ -326,6 +366,128 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         return result;
     }
 
+    public async Task<OtmrSessionUploadPackage> BuildUploadPackageAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        OtmrUploadSessionMetadata metadata;
+        await using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT session_id, started_utc, finished_utc, software_version, com_port,
+                       serial_settings, vehicle_identifier, vehicle_type, ccf_filename, ccf_sha256,
+                       rcm_profile_filename, rcm_profile_sha256, rcm_profile_json, sync_state
+                FROM recording_sessions
+                WHERE session_id = $sessionId;
+                """;
+            command.Parameters.AddWithValue("$sessionId", sessionId.ToString("D"));
+            await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException($"Recording session {sessionId:D} was not found.");
+
+            metadata = new OtmrUploadSessionMetadata(
+                Guid.Parse(reader.GetString(0)),
+                DateTimeOffset.Parse(reader.GetString(1)),
+                reader.IsDBNull(2) ? null : DateTimeOffset.Parse(reader.GetString(2)),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetString(12),
+                reader.GetString(13));
+        }
+
+        var rawEntries = new List<OtmrUploadRawEntry>();
+        await using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT sequence, timestamp_utc, direction, data, interpretation
+                FROM raw_serial_entries
+                WHERE session_id = $sessionId
+                ORDER BY sequence;
+                """;
+            command.Parameters.AddWithValue("$sessionId", sessionId.ToString("D"));
+            await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                rawEntries.Add(new OtmrUploadRawEntry(
+                    reader.GetInt64(0),
+                    DateTimeOffset.Parse(reader.GetString(1)),
+                    reader.GetString(2),
+                    (byte[])reader[3],
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+            }
+        }
+
+        var liveFrames = new List<OtmrUploadLiveFrame>();
+        await using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT sequence, timestamp_utc, data, decode_status, decoder_version
+                FROM live_frames
+                WHERE session_id = $sessionId
+                ORDER BY sequence;
+                """;
+            command.Parameters.AddWithValue("$sessionId", sessionId.ToString("D"));
+            await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                liveFrames.Add(new OtmrUploadLiveFrame(
+                    reader.GetInt64(0),
+                    DateTimeOffset.Parse(reader.GetString(1)),
+                    (byte[])reader[2],
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+            }
+        }
+
+        IReadOnlyList<Dictionary<string, object?>> inputs = await ReadRowsAsync(
+            connection,
+            "SELECT * FROM rcm_input_tests WHERE session_id = $sessionId ORDER BY input_guid;",
+            sessionId,
+            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<Dictionary<string, object?>> captures = await ReadRowsAsync(
+            connection,
+            "SELECT * FROM rcm_capture_windows WHERE session_id = $sessionId ORDER BY created_utc, capture_id;",
+            sessionId,
+            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<Dictionary<string, object?>> captureFrames = await ReadRowsAsync(
+            connection,
+            """
+            SELECT f.*
+            FROM rcm_capture_frames f
+            JOIN rcm_capture_windows w ON w.capture_id = f.capture_id
+            WHERE w.session_id = $sessionId
+            ORDER BY f.capture_id, f.sequence;
+            """,
+            sessionId,
+            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<Dictionary<string, object?>> comparisons = await ReadRowsAsync(
+            connection,
+            "SELECT * FROM rcm_comparisons WHERE session_id = $sessionId ORDER BY input_guid;",
+            sessionId,
+            cancellationToken).ConfigureAwait(false);
+
+        string rcmPayloadJson = JsonSerializer.Serialize(new
+        {
+            inputs,
+            captures,
+            captureFrames,
+            comparisons
+        });
+
+        return new OtmrSessionUploadPackage(metadata, rawEntries, liveFrames, rcmPayloadJson);
+    }
+
     public async Task MarkUploadSucceededAsync(
         Guid outboxId,
         string remoteSessionId,
@@ -337,7 +499,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         using SqliteTransaction transaction = connection.BeginTransaction();
 
-        string? sessionId = null;
+        string? sessionId;
         await using (SqliteCommand find = connection.CreateCommand())
         {
             find.Transaction = transaction;
@@ -399,6 +561,17 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private bool TryQueue(DbWorkItem item)
+    {
+        if (_writeQueue.Writer.TryWrite(item))
+            return true;
+
+        lock (_stateSync)
+            _syncState = "LOCAL_DB_QUEUE_ERROR";
+        RaiseStatusChanged();
+        return false;
+    }
+
     private Guid? RecordingSessionOrNull()
     {
         lock (_stateSync)
@@ -407,12 +580,64 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 
     private async Task EnsureDatabaseAsync(CancellationToken cancellationToken)
     {
-        await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        if (_databaseInitialized)
+            return;
+
+        await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_databaseInitialized)
+                return;
+
+            await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            await using (SqliteCommand journal = connection.CreateCommand())
+            {
+                journal.CommandText = "PRAGMA journal_mode=WAL;";
+                await journal.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            int schemaVersion;
+            await using (SqliteCommand version = connection.CreateCommand())
+            {
+                version.CommandText = "PRAGMA user_version;";
+                schemaVersion = Convert.ToInt32(await version.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+            }
+
+            if (schemaVersion > CurrentSchemaVersion)
+                throw new InvalidDataException(
+                    $"OTMR database schema {schemaVersion} is newer than this application supports ({CurrentSchemaVersion}).");
+
+            await CreateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+
+            if (schemaVersion < CurrentSchemaVersion)
+            {
+                // Schema 1 is the first versioned schema. Existing pre-versioned
+                // databases already have compatible tables, so creation above is
+                // idempotent and the version marker can now be committed.
+                await using SqliteCommand setVersion = connection.CreateCommand();
+                setVersion.CommandText = $"PRAGMA user_version={CurrentSchemaVersion};";
+                await setVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            int recovered = await RecoverInterruptedSessionsAsync(connection, cancellationToken).ConfigureAwait(false);
+            _databaseInitialized = true;
+            if (recovered > 0)
+            {
+                lock (_stateSync)
+                    _syncState = "RECOVERED_INTERRUPTED_SESSION";
+                RaiseStatusChanged();
+            }
+        }
+        finally
+        {
+            _initializationGate.Release();
+        }
+    }
+
+    private static async Task CreateSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
-            PRAGMA journal_mode=WAL;
-            PRAGMA foreign_keys=ON;
-
             CREATE TABLE IF NOT EXISTS recording_sessions (
                 session_id TEXT PRIMARY KEY,
                 started_utc TEXT NOT NULL,
@@ -544,6 +769,69 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task<int> RecoverInterruptedSessionsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var interruptedSessionIds = new List<string>();
+        await using (SqliteCommand find = connection.CreateCommand())
+        {
+            find.CommandText = """
+                SELECT session_id
+                FROM recording_sessions
+                WHERE sync_state = 'RECORDING' AND finished_utc IS NULL;
+                """;
+            await using SqliteDataReader reader = await find.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                interruptedSessionIds.Add(reader.GetString(0));
+        }
+
+        foreach (string sessionId in interruptedSessionIds)
+        {
+            using SqliteTransaction transaction = connection.BeginTransaction();
+            DateTimeOffset recoveredAt = DateTimeOffset.UtcNow;
+
+            await using (SqliteCommand update = connection.CreateCommand())
+            {
+                update.Transaction = transaction;
+                update.CommandText = """
+                    UPDATE recording_sessions
+                    SET finished_utc = $finishedUtc,
+                        sync_state = 'INTERRUPTED_PENDING_UPLOAD',
+                        notes = CASE
+                            WHEN notes IS NULL OR notes = '' THEN 'Recovered after application interruption.'
+                            ELSE notes || ' | Recovered after application interruption.'
+                        END
+                    WHERE session_id = $sessionId;
+                    """;
+                update.Parameters.AddWithValue("$finishedUtc", UtcText(recoveredAt));
+                update.Parameters.AddWithValue("$sessionId", sessionId);
+                await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await using (SqliteCommand outbox = connection.CreateCommand())
+            {
+                outbox.Transaction = transaction;
+                outbox.CommandText = """
+                    INSERT INTO sync_outbox (
+                        outbox_id, session_id, entity_type, state, created_utc, attempt_count)
+                    SELECT $outboxId, $sessionId, 'recording_session', 'PENDING', $createdUtc, 0
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM sync_outbox
+                        WHERE session_id = $sessionId AND state IN ('PENDING', 'UPLOADED'));
+                    """;
+                outbox.Parameters.AddWithValue("$outboxId", Guid.NewGuid().ToString("D"));
+                outbox.Parameters.AddWithValue("$sessionId", sessionId);
+                outbox.Parameters.AddWithValue("$createdUtc", UtcText(recoveredAt));
+                await outbox.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            transaction.Commit();
+        }
+
+        return interruptedSessionIds.Count;
+    }
+
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var builder = new SqliteConnectionStringBuilder
@@ -559,6 +847,14 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         pragma.CommandText = "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
         await pragma.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         return connection;
+    }
+
+    private async Task CheckpointWalAsync(CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand checkpoint = connection.CreateCommand();
+        checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+        await checkpoint.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task WriterLoopAsync()
@@ -580,32 +876,47 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 }
 
                 if (batch.Count > 0)
-                {
-                    try
-                    {
-                        await WriteBatchAsync(batch).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        lock (_stateSync)
-                            _syncState = "LOCAL_DB_ERROR";
-                        barrier?.TrySetException(ex);
-                        RaiseStatusChanged();
-                        continue;
-                    }
-                }
+                    await WriteBatchWithRetryAsync(batch).ConfigureAwait(false);
 
                 barrier?.TrySetResult(true);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // The live serial path must never be torn down by a background
-            // database writer failure. Status reports the local DB error and
-            // shutdown/dispose handles the remaining lifecycle.
             lock (_stateSync)
-                _syncState = "LOCAL_DB_ERROR";
+                _syncState = $"LOCAL_DB_WRITER_STOPPED: {ex.GetType().Name}";
             RaiseStatusChanged();
+        }
+    }
+
+    private async Task WriteBatchWithRetryAsync(IReadOnlyList<DbWorkItem> batch)
+    {
+        int attempt = 0;
+        while (true)
+        {
+            try
+            {
+                await WriteBatchAsync(batch).ConfigureAwait(false);
+                if (attempt > 0)
+                {
+                    lock (_stateSync)
+                        _syncState = _isRecording ? "LOCAL_RECORDING" : "LOCAL_DB_RECOVERED";
+                    RaiseStatusChanged();
+                }
+                return;
+            }
+            catch
+            {
+                attempt++;
+                lock (_stateSync)
+                    _syncState = $"LOCAL_DB_RETRY_{attempt}";
+                RaiseStatusChanged();
+
+                // Keep the same batch in memory and retry it. It is never discarded
+                // merely because SQLite was temporarily busy/unavailable.
+                int delayMs = Math.Min(5000, 100 * (1 << Math.Min(attempt - 1, 5)));
+                await Task.Delay(delayMs).ConfigureAwait(false);
+            }
         }
     }
 
@@ -817,6 +1128,27 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         await command.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
 
+    private static async Task<IReadOnlyList<Dictionary<string, object?>>> ReadRowsAsync(
+        SqliteConnection connection,
+        string sql,
+        Guid sessionId,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<Dictionary<string, object?>>();
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("$sessionId", sessionId.ToString("D"));
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var row = new Dictionary<string, object?>(StringComparer.Ordinal);
+            for (int i = 0; i < reader.FieldCount; i++)
+                row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            rows.Add(row);
+        }
+        return rows;
+    }
+
     private async Task FlushQueueAsync(CancellationToken cancellationToken)
     {
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -857,13 +1189,15 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         }
         catch
         {
-            // Application shutdown should continue; the database remains WAL-safe.
+            // Application shutdown should continue. Any session left as RECORDING
+            // is recovered and queued on the next InitializeAsync call.
         }
 
         _disposed = true;
         _writeQueue.Writer.TryComplete();
         try { await _writerTask.ConfigureAwait(false); } catch { }
         _lifecycleGate.Dispose();
+        _initializationGate.Dispose();
     }
 
     private abstract record DbWorkItem;
