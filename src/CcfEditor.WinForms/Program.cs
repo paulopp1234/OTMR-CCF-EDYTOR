@@ -21,6 +21,8 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
+        var mainForm = new MainForm();
+        OtmrLiveStartTestFeature.Install(mainForm);
+        Application.Run(mainForm);
     }
 }
