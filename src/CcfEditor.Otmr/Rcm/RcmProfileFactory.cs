@@ -5,6 +5,50 @@ namespace CcfEditor.Otmr.Rcm;
 
 public static class RcmProfileFactory
 {
+    public static RcmProfile CreateFromCcf(
+        CcfDocument document,
+        string vehicleType,
+        DateTimeOffset timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentException.ThrowIfNullOrWhiteSpace(vehicleType);
+        RcmProfile profile = CreateHeader(document, vehicleType, timestamp);
+        var consumed = new HashSet<int>();
+
+        foreach (CcfRecord recordA in document.Records)
+        {
+            if (consumed.Contains(recordA.PhysicalIndex) || string.IsNullOrWhiteSpace(recordA.Name))
+                continue;
+
+            int? recordBIndex = recordA.IsDigital && recordA.PairRecord is ushort pair &&
+                               pair < document.Records.Count && pair != recordA.PhysicalIndex
+                ? pair
+                : null;
+            CcfRecord? recordB = recordBIndex is int b ? document.Records[b] : null;
+            consumed.Add(recordA.PhysicalIndex);
+            if (recordB is not null)
+                consumed.Add(recordB.PhysicalIndex);
+
+            profile.Pins.Add(new RcmPinProfile
+            {
+                Id = Guid.NewGuid(),
+                Connector = string.Empty,
+                Pin = string.Empty,
+                Function = recordA.Name,
+                Role = string.Empty,
+                Mio = string.Empty,
+                PhysicalChannel = string.Empty,
+                ReturnOrPair = string.Empty,
+                SafetyClassification = string.Empty,
+                Testable = false,
+                CcfReference = BuildCcfReference(recordA, recordB),
+                RcmResult = RcmResultStates.NotTestable
+            });
+        }
+
+        return profile;
+    }
+
     public static RcmProfile Create(
         CcfDocument document,
         IReadOnlyList<OtmrBenchPinDefinition> physicalPins,
@@ -15,20 +59,13 @@ public static class RcmProfileFactory
         ArgumentNullException.ThrowIfNull(physicalPins);
         ArgumentException.ThrowIfNullOrWhiteSpace(vehicleType);
 
-        var profile = new RcmProfile
-        {
-            VehicleType = vehicleType,
-            SourceCcfFilename = Path.GetFileName(document.SourcePath ?? "opened.ccf"),
-            SourceCcfSha256 = document.OriginalSha256,
-            SourceCcfSize = document.GetOriginalBytesSnapshot().LongLength,
-            CreationTimestamp = timestamp,
-            LastModifiedTimestamp = timestamp
-        };
+        RcmProfile profile = CreateHeader(document, vehicleType, timestamp);
 
         foreach (OtmrBenchPinDefinition definition in physicalPins)
         {
             profile.Pins.Add(new RcmPinProfile
             {
+                Id = Guid.NewGuid(),
                 Connector = definition.Connector,
                 Pin = definition.Pin,
                 Function = definition.ExpectedFunction,
@@ -43,10 +80,25 @@ public static class RcmProfileFactory
                     ? RcmResultStates.NotTested
                     : RcmResultStates.NotTestable
             });
+            if (!string.IsNullOrWhiteSpace(definition.Connector) &&
+                !profile.Connectors.Any(connector => string.Equals(connector.Name, definition.Connector, StringComparison.OrdinalIgnoreCase)))
+            {
+                profile.Connectors.Add(new RcmConnector { Name = definition.Connector });
+            }
         }
 
         return profile;
     }
+
+    private static RcmProfile CreateHeader(CcfDocument document, string vehicleType, DateTimeOffset timestamp) => new()
+    {
+        VehicleType = vehicleType,
+        SourceCcfFilename = Path.GetFileName(document.SourcePath ?? "opened.ccf"),
+        SourceCcfSha256 = document.OriginalSha256,
+        SourceCcfSize = document.GetOriginalBytesSnapshot().LongLength,
+        CreationTimestamp = timestamp,
+        LastModifiedTimestamp = timestamp
+    };
 
     private static RcmCcfReference? BuildCcfReference(
         CcfDocument document,
@@ -76,6 +128,20 @@ public static class RcmProfileFactory
             PairRelationship = BuildPairRelationship(recordA, definition.ExpectedRecordB)
         };
     }
+
+    private static RcmCcfReference BuildCcfReference(CcfRecord recordA, CcfRecord? recordB) => new()
+    {
+        LogicalCard = recordA.Card,
+        LogicalChannel = recordA.Channel,
+        RecordA = recordA.PhysicalIndex,
+        RecordB = recordB?.PhysicalIndex,
+        RecordAText = recordA.Name,
+        RecordAValue = FormatRecordValue(recordA),
+        RecordBText = recordB?.Name,
+        RecordBValue = FormatRecordValue(recordB),
+        RecordType = recordA.Type,
+        PairRelationship = recordB is null ? null : $"{recordA.PhysicalIndex} ↔ {recordB.PhysicalIndex}"
+    };
 
     private static CcfRecord? GetRecord(CcfDocument document, int? index) =>
         index is int value && (uint)value < (uint)document.Records.Count

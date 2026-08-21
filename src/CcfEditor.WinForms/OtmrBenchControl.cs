@@ -19,9 +19,8 @@ public partial class OtmrBenchControl : UserControl
     public OtmrBenchControl()
     {
         InitializeComponent();
-
         if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
-            LoadBundledPinMap();
+            RcmProfilePaths.EnsureDefaultFolder();
         UpdateWorkflow();
     }
 
@@ -54,44 +53,30 @@ public partial class OtmrBenchControl : UserControl
             $"{timestamp.ToLocalTime():HH:mm:ss.fff}. Raw evidence only; decoder NOT VERIFIED.";
     }
 
-    private void LoadBundledPinMap()
-    {
-        string path = Path.Combine(
-            AppContext.BaseDirectory,
-            "Profiles",
-            "Class171",
-            "Class171_Bench_PinMap.tsv");
-        if (!File.Exists(path))
-        {
-            statusLabel.Text = $"Class 171 physical pin map was not found: {path}";
-            return;
-        }
-
-        LoadPinMap(path);
-    }
-
-    private void LoadPinMap(string path)
+    private RcmPinMapImportResult LoadPinMap(string path)
     {
         IReadOnlyList<OtmrBenchPinDefinition> loaded = OtmrBenchProfileReader.LoadTsv(path);
         _definitions.Clear();
         _definitions.AddRange(loaded);
         _pinMapPath = path;
-        pinMapStatusLabel.Text =
-            $"Physical pin map: {Path.GetFileName(path)} | " +
-            $"{_definitions.Count(definition => definition.IsVoltageTestPoint)} testable / {_definitions.Count} total";
+        pinMapStatusLabel.Text = $"Optional pin map: {Path.GetFileName(path)}";
+        if (_rcmProfile is null)
+            return default;
+        RcmPinMapImportResult result = RcmPinMapImporter.ImportFillUnassigned(_rcmProfile, _definitions);
         PopulateConnectors();
         RenderTable();
+        return result;
     }
 
     private void LoadPinMapButton_Click(object? sender, EventArgs e)
     {
-        if (_captureCoordinator.IsCapturing)
+        if (_captureCoordinator.IsCapturing || _rcmProfile is null)
             return;
 
         using var dialog = new OpenFileDialog
         {
             Filter = "OTMR bench pin maps (*.tsv)|*.tsv|All files (*.*)|*.*",
-            Title = "Load Class 171 physical pin map",
+            Title = "Import optional physical pin map into the RCM JSON",
             CheckFileExists = true,
             Multiselect = false
         };
@@ -100,8 +85,10 @@ public partial class OtmrBenchControl : UserControl
 
         try
         {
-            LoadPinMap(dialog.FileName);
-            statusLabel.Text = "Physical pin map loaded. Create a new RCM profile to use it.";
+            RcmPinMapImportResult result = LoadPinMap(dialog.FileName);
+            statusLabel.Text =
+                $"Optional pin map imported: {result.UpdatedUnassignedInputs} unassigned logical input(s) updated, " +
+                $"{result.AddedPhysicalInputs} physical-only input(s) added. Existing physical text was not overwritten.";
         }
         catch (Exception ex)
         {
@@ -114,10 +101,7 @@ public partial class OtmrBenchControl : UserControl
     private void RefreshCcfFromHost()
     {
         _document = (FindForm() as MainForm)?.GetCurrentCcfForBench();
-        ccfStatusLabel.Text = _document is null
-            ? "CCF: none loaded"
-            : $"CCF: {Path.GetFileName(_document.SourcePath ?? "opened CCF")} | " +
-              $"{_document.Length:N0} bytes | SHA-256 {_document.OriginalSha256[..12]}…";
+        UpdateCcfStatus();
         UpdateCommandAvailability();
         RenderTable();
     }
@@ -129,32 +113,22 @@ public partial class OtmrBenchControl : UserControl
             MessageBox.Show(this, "Load a CCF before creating an RCM profile.", "RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        if (_definitions.Count == 0)
-        {
-            MessageBox.Show(this, "Load the Class 171 physical pin map first.", "RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        _rcmProfile = RcmProfileFactory.Create(_document, _definitions, "Class 171", DateTimeOffset.Now);
+        _rcmProfile = RcmProfileFactory.CreateFromCcf(_document, "Class 171", DateTimeOffset.Now);
         _rcmProfilePath = null;
         PopulateConnectors();
         RenderTable();
+        UpdateCcfStatus();
         statusLabel.Text =
-            "RCM profile created in memory from the source CCF and physical pin map. Save it to begin progressive persistence.";
+            "RCM profile created from logical CCF records. Physical connector, pin, MIO, wiring, testability and safety remain unassigned.";
     }
 
     private async void OpenRcmProfileButton_Click(object? sender, EventArgs e)
     {
-        if (_document is null)
-        {
-            MessageBox.Show(this, "Load the source CCF before opening its RCM profile.", "Open RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
         using var dialog = new OpenFileDialog
         {
             Filter = "OTMR RCM profiles (*.json)|*.json|JSON files (*.json)|*.json",
             Title = "Open OTMR RCM profile",
+            InitialDirectory = RcmProfilePaths.EnsureDefaultFolder(),
             CheckFileExists = true,
             Multiselect = false
         };
@@ -164,12 +138,14 @@ public partial class OtmrBenchControl : UserControl
         try
         {
             RcmProfile loaded = await RcmProfileJson.LoadAsync(dialog.FileName);
-            RcmProfileJson.EnsureMatchesSource(loaded, _document.OriginalSha256, _document.Length);
             _rcmProfile = loaded;
             _rcmProfilePath = Path.GetFullPath(dialog.FileName);
             PopulateConnectors();
             RenderTable();
-            statusLabel.Text = $"RCM profile reopened: {Path.GetFileName(_rcmProfilePath)}. Progress restored.";
+            UpdateCcfStatus();
+            statusLabel.Text =
+                $"RCM profile reopened standalone: {Path.GetFileName(_rcmProfilePath)}. " +
+                $"Progress restored; {RcmProfileJson.GetCcfStatus(loaded, _document)}.";
         }
         catch (Exception ex)
         {
@@ -190,6 +166,7 @@ public partial class OtmrBenchControl : UserControl
                 DefaultExt = "json",
                 AddExtension = true,
                 FileName = $"{Path.GetFileNameWithoutExtension(_rcmProfile.SourceCcfFilename)}_RCM.json",
+                InitialDirectory = RcmProfilePaths.EnsureDefaultFolder(),
                 Title = "Save OTMR RCM profile"
             };
             if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -197,6 +174,25 @@ public partial class OtmrBenchControl : UserControl
             _rcmProfilePath = Path.GetFullPath(dialog.FileName);
         }
 
+        await SaveProfileToKnownPathAsync(showConfirmation: true);
+    }
+
+    private async void SaveRcmProfileAsButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null)
+            return;
+        using var dialog = new SaveFileDialog
+        {
+            Filter = "OTMR RCM profiles (*.json)|*.json",
+            DefaultExt = "json",
+            AddExtension = true,
+            InitialDirectory = RcmProfilePaths.EnsureDefaultFolder(),
+            FileName = Path.GetFileName(_rcmProfilePath ?? $"{Path.GetFileNameWithoutExtension(_rcmProfile.SourceCcfFilename)}_RCM.json"),
+            Title = "Save OTMR RCM profile as"
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        _rcmProfilePath = Path.GetFullPath(dialog.FileName);
         await SaveProfileToKnownPathAsync(showConfirmation: true);
     }
 
@@ -216,6 +212,172 @@ public partial class OtmrBenchControl : UserControl
             MessageBox.Show(this, ex.Message, "Unable to save RCM profile", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
+
+    private async void AddConnectorButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null)
+            return;
+        using var dialog = new TextPromptDialog("Add Connector", "Connector name (for example J1, J3, MIO-A or TB1):");
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        try
+        {
+            RcmProfileEditor.AddConnector(_rcmProfile, dialog.Value);
+            MarkProfileModified();
+            PopulateConnectors();
+            connectorComboBox.SelectedItem = dialog.Value;
+            await SaveProfileToKnownPathAsync(false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot add connector", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void RenameConnectorButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null || connectorComboBox.SelectedIndex <= 0 || connectorComboBox.SelectedItem is not string oldName)
+            return;
+        using var dialog = new TextPromptDialog("Rename Connector", "New connector name:", oldName);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        try
+        {
+            RcmProfileEditor.RenameConnector(_rcmProfile, oldName, dialog.Value);
+            MarkProfileModified();
+            PopulateConnectors();
+            connectorComboBox.SelectedItem = dialog.Value;
+            await SaveProfileToKnownPathAsync(false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot rename connector", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void DeleteConnectorButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null || connectorComboBox.SelectedIndex <= 0 || connectorComboBox.SelectedItem is not string name)
+            return;
+        int count = _rcmProfile.Pins.Count(pin => string.Equals(pin.Connector, name, StringComparison.OrdinalIgnoreCase));
+        string message = count == 0
+            ? $"Delete connector '{name}'?"
+            : $"Connector '{name}' contains {count} input(s), including any captured evidence.\r\n\r\n" +
+              "Delete the connector AND those inputs? This cannot be undone.";
+        if (MessageBox.Show(this, message, "Delete Connector", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+            return;
+
+        RcmProfileEditor.DeleteConnector(_rcmProfile, name, deleteInputs: true);
+        MarkProfileModified();
+        PopulateConnectors();
+        await SaveProfileToKnownPathAsync(false);
+    }
+
+    private async void AddInputButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null)
+            return;
+        string connector = connectorComboBox.SelectedIndex > 0 ? connectorComboBox.SelectedItem as string ?? string.Empty : string.Empty;
+        var initial = new RcmInputEdit { Connector = connector };
+        using var dialog = new RcmInputEditorDialog("Add RCM Input / Pin", _rcmProfile.Connectors.Select(item => item.Name), initial);
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result is null)
+            return;
+        try
+        {
+            RcmPinProfile pin = RcmProfileEditor.AddInput(_rcmProfile, dialog.Result, _document);
+            MarkProfileModified();
+            PopulateConnectors();
+            SelectConnectorFor(pin.Connector);
+            RenderTable(pin.Id);
+            await SaveProfileToKnownPathAsync(false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot add input", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void EditInputButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null || SelectedProfilePin() is not RcmPinProfile pin)
+            return;
+        using var dialog = new RcmInputEditorDialog(
+            $"Edit RCM Input {pin.DisplayKey}",
+            _rcmProfile.Connectors.Select(item => item.Name),
+            RcmInputEdit.From(pin));
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result is null)
+            return;
+
+        bool logicalChange = IsLogicalMappingChange(pin.CcfReference, dialog.Result);
+        if (logicalChange && RcmProfileEditor.HasEvidence(pin) && MessageBox.Show(
+                this,
+                "This input already contains captured RCM evidence. Changing its logical CCF mapping may invalidate the interpretation of that evidence.\r\n\r\nContinue without deleting evidence?",
+                "Captured evidence warning",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+            return;
+
+        try
+        {
+            RcmProfileEditor.UpdateInput(_rcmProfile, pin.Id, dialog.Result, _document);
+            MarkProfileModified();
+            PopulateConnectors();
+            SelectConnectorFor(pin.Connector);
+            RenderTable(pin.Id);
+            await SaveProfileToKnownPathAsync(false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot edit input", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void DeleteInputButton_Click(object? sender, EventArgs e)
+    {
+        if (_rcmProfile is null || SelectedProfilePin() is not RcmPinProfile pin)
+            return;
+        string evidenceWarning = RcmProfileEditor.HasEvidence(pin)
+            ? " This input contains captured evidence which will also be deleted."
+            : string.Empty;
+        if (MessageBox.Show(this, $"Delete input {pin.DisplayKey}?{evidenceWarning}", "Delete Input", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+            return;
+        RcmProfileEditor.DeleteInput(_rcmProfile, pin.Id);
+        MarkProfileModified();
+        RenderTable();
+        await SaveProfileToKnownPathAsync(false);
+    }
+
+    private void SelectConnectorFor(string connector) =>
+        connectorComboBox.SelectedItem = string.IsNullOrWhiteSpace(connector) ? "(Unassigned)" : connector;
+
+    private void MarkProfileModified()
+    {
+        if (_rcmProfile is not null)
+            _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
+    }
+
+    private void UpdateCcfStatus()
+    {
+        if (_rcmProfile is not null)
+        {
+            ccfStatusLabel.Text =
+                $"{RcmProfileJson.GetCcfStatus(_rcmProfile, _document)} | source {_rcmProfile.SourceCcfFilename} | " +
+                $"SHA-256 {ShortHash(_rcmProfile.SourceCcfSha256)}";
+        }
+        else
+        {
+            ccfStatusLabel.Text = _document is null
+                ? "CCF NOT LOADED"
+                : $"CCF loaded: {Path.GetFileName(_document.SourcePath ?? "opened CCF")} | {_document.Length:N0} bytes";
+        }
+    }
+
+    private static string ShortHash(string hash) => hash.Length <= 12 ? hash : hash[..12] + "…";
+
+    private static bool IsLogicalMappingChange(RcmCcfReference? current, RcmInputEdit edit) =>
+        current?.RecordA != edit.RecordA || current?.RecordB != edit.RecordB ||
+        current?.LogicalCard != edit.LogicalCard || current?.LogicalChannel != edit.LogicalChannel ||
+        current?.RecordType != edit.RecordType;
 
     private void ConnectorComboBox_SelectedIndexChanged(object? sender, EventArgs e) => RenderTable();
 
@@ -238,11 +400,11 @@ public partial class OtmrBenchControl : UserControl
             _captureCoordinator.Begin(pin, state, DateTimeOffset.Now);
             captureWindowTimer.Interval = Math.Max(100, decimal.ToInt32(captureSecondsNumeric.Value * 1000M));
             captureWindowTimer.Start();
-            RenderTable(pin.Key);
+            RenderTable(pin.Id);
             UpdateCommandAvailability();
             statusLabel.Text = state == RcmElectricalTestState.VoltageRemoved
-                ? $"CAPTURING {pin.Key}: operator condition = TEST VOLTAGE REMOVED."
-                : $"CAPTURING {pin.Key}: operator condition = +24 V APPLIED.";
+                ? $"CAPTURING {pin.DisplayKey}: operator condition = TEST VOLTAGE REMOVED."
+                : $"CAPTURING {pin.DisplayKey}: operator condition = +24 V APPLIED.";
         }
         catch (Exception ex)
         {
@@ -253,17 +415,19 @@ public partial class OtmrBenchControl : UserControl
     private async void CaptureWindowTimer_Tick(object? sender, EventArgs e)
     {
         captureWindowTimer.Stop();
-        string? key = _captureCoordinator.ActivePinKey;
+        Guid? inputId = _captureCoordinator.ActiveInputId;
+        string? displayKey = _captureCoordinator.ActivePinKey;
         try
         {
             RcmStateEvidence evidence = _captureCoordinator.Stop(DateTimeOffset.Now);
             if (_rcmProfile is not null)
                 _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
-            RenderTable(key);
+            RenderTable(inputId);
             UpdateCommandAvailability();
             statusLabel.Text =
-                $"CAPTURED {key}: {evidence.FrameCount} complete raw frame(s). " +
-                "CANDIDATE RAW EVIDENCE only; decoder NOT VERIFIED.";
+                evidence.Tested
+                    ? $"CAPTURED {displayKey}: {evidence.FrameCount} complete raw frame(s). CANDIDATE RAW EVIDENCE only; decoder NOT VERIFIED."
+                    : $"NO OTMR DATA for {displayKey}: zero complete frames. State remains NOT CAPTURED and progress was not incremented.";
             await SaveProfileToKnownPathAsync(showConfirmation: false);
         }
         catch (Exception ex)
@@ -284,9 +448,9 @@ public partial class OtmrBenchControl : UserControl
             _captureCoordinator.Compare(pin, DateTimeOffset.Now);
             if (_rcmProfile is not null)
                 _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
-            RenderTable(pin.Key);
+            RenderTable(pin.Id);
             statusLabel.Text =
-                $"Compared {pin.Key}: {pin.Comparison.RepeatableDifferences.Count} repeatable candidate raw difference(s). " +
+                $"Compared {pin.DisplayKey}: {pin.Comparison.RepeatableDifferences.Count} repeatable candidate raw difference(s). " +
                 "Decoder NOT VERIFIED.";
             await SaveProfileToKnownPathAsync(showConfirmation: false);
         }
@@ -307,8 +471,8 @@ public partial class OtmrBenchControl : UserControl
             _captureCoordinator.Reset(pin);
             if (_rcmProfile is not null)
                 _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
-            RenderTable(pin.Key);
-            statusLabel.Text = $"Reset test evidence for {pin.Key} only.";
+            RenderTable(pin.Id);
+            statusLabel.Text = $"Reset test evidence for {pin.DisplayKey} only.";
             await SaveProfileToKnownPathAsync(showConfirmation: false);
         }
         catch (Exception ex)
@@ -320,9 +484,7 @@ public partial class OtmrBenchControl : UserControl
     private void PopulateConnectors()
     {
         string? previous = connectorComboBox.SelectedItem as string;
-        IEnumerable<string> values = _rcmProfile is null
-            ? _definitions.Select(definition => definition.Connector)
-            : _rcmProfile.Pins.Select(pin => pin.Connector);
+        IEnumerable<string> values = _rcmProfile?.Connectors.Select(connector => connector.Name) ?? Enumerable.Empty<string>();
         string[] connectors = values.Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -331,10 +493,11 @@ public partial class OtmrBenchControl : UserControl
         try
         {
             connectorComboBox.Items.Clear();
+            connectorComboBox.Items.Add("(Unassigned)");
             connectorComboBox.Items.AddRange(connectors);
             if (previous is not null && connectors.Contains(previous, StringComparer.OrdinalIgnoreCase))
                 connectorComboBox.SelectedItem = connectors.First(value => string.Equals(value, previous, StringComparison.OrdinalIgnoreCase));
-            else if (connectors.Length > 0)
+            else
                 connectorComboBox.SelectedIndex = 0;
         }
         finally
@@ -343,13 +506,14 @@ public partial class OtmrBenchControl : UserControl
         }
     }
 
-    private void RenderTable(string? preferredKey = null)
+    private void RenderTable(Guid? preferredInputId = null)
     {
         if (rcmGrid is null)
             return;
 
-        preferredKey ??= rcmGrid.CurrentRow?.Tag as string;
-        string connector = connectorComboBox.SelectedItem as string ?? string.Empty;
+        preferredInputId ??= rcmGrid.CurrentRow?.Tag is Guid selectedId ? selectedId : null;
+        string connectorSelection = connectorComboBox.SelectedItem as string ?? "(Unassigned)";
+        string connector = connectorSelection == "(Unassigned)" ? string.Empty : connectorSelection;
         rcmGrid.SuspendLayout();
         DataGridViewRow? selectedRow = null;
         try
@@ -370,31 +534,9 @@ public partial class OtmrBenchControl : UserControl
                         "NOT VERIFIED",
                         pin.Testable ? pin.RcmResult : "NOT TESTABLE");
                     DataGridViewRow row = rcmGrid.Rows[index];
-                    row.Tag = pin.Key;
+                    row.Tag = pin.Id;
                     ApplyRowStyle(row, pin.Testable, pin.RcmResult);
-                    if (string.Equals(pin.Key, preferredKey, StringComparison.Ordinal))
-                        selectedRow = row;
-                }
-            }
-            else
-            {
-                foreach (OtmrBenchPinDefinition definition in _definitions.Where(definition =>
-                             string.Equals(definition.Connector, connector, StringComparison.OrdinalIgnoreCase)))
-                {
-                    string key = $"{definition.Connector}-{definition.Pin}";
-                    int index = rcmGrid.Rows.Add(
-                        definition.Pin,
-                        definition.ExpectedFunction,
-                        FormatDefinitionCcf(definition),
-                        definition.IsVoltageTestPoint ? "PROFILE REQUIRED" : "NOT TESTABLE",
-                        definition.IsVoltageTestPoint ? "PROFILE REQUIRED" : "NOT TESTABLE",
-                        "—",
-                        "NOT VERIFIED",
-                        definition.IsVoltageTestPoint ? RcmResultStates.NotTested : "NOT TESTABLE");
-                    DataGridViewRow row = rcmGrid.Rows[index];
-                    row.Tag = key;
-                    ApplyRowStyle(row, definition.IsVoltageTestPoint, row.Cells[7].Value?.ToString() ?? string.Empty);
-                    if (string.Equals(key, preferredKey, StringComparison.Ordinal))
+                    if (pin.Id == preferredInputId)
                         selectedRow = row;
                 }
             }
@@ -429,11 +571,9 @@ public partial class OtmrBenchControl : UserControl
 
     private void UpdateWorkflow()
     {
-        string? key = rcmGrid?.CurrentRow?.Tag as string;
-        OtmrBenchPinDefinition? definition = FindDefinition(key);
-        RcmPinProfile? pin = FindProfilePin(key);
+        RcmPinProfile? pin = SelectedProfilePin();
 
-        if (definition is null && pin is null)
+        if (pin is null)
         {
             selectedPinLabel.Text = "Select a physical pin";
             voltageRemovedInstructionLabel.Text = "REMOVE TEST VOLTAGE FROM SELECTED PIN";
@@ -445,26 +585,16 @@ public partial class OtmrBenchControl : UserControl
             return;
         }
 
-        string connector = pin?.Connector ?? definition!.Connector;
-        string physicalPin = pin?.Pin ?? definition!.Pin;
-        string function = pin?.Function ?? definition!.ExpectedFunction;
-        string pinKey = $"{connector}-{physicalPin}";
-        RcmCcfReference? ccf = pin?.CcfReference;
+        string pinKey = pin.DisplayKey;
+        RcmCcfReference? ccf = pin.CcfReference;
         selectedPinLabel.Text =
-            $"{pinKey}\r\n{function}\r\n" +
-            $"Expected CCF records: {FormatRecordPair(ccf, definition)}\r\n" +
-            $"Card {ccf?.LogicalCard?.ToString() ?? definition?.ExpectedCard?.ToString() ?? "—"} / " +
-            $"Channel {ccf?.LogicalChannel?.ToString() ?? definition?.ExpectedChannel?.ToString() ?? "—"}";
+            $"{pinKey}\r\n{pin.Function}\r\n" +
+            $"Expected CCF records: {FormatRecordPair(ccf)}\r\n" +
+            $"Card {ccf?.LogicalCard?.ToString() ?? "—"} / Channel {ccf?.LogicalChannel?.ToString() ?? "—"}";
         voltageRemovedInstructionLabel.Text = $"REMOVE TEST VOLTAGE FROM {pinKey}";
         voltageAppliedInstructionLabel.Text = $"APPLY +24 V TO {pinKey}";
 
-        if (pin is null)
-        {
-            voltageRemovedStatusLabel.Text = "PROFILE NOT CREATED";
-            voltageAppliedStatusLabel.Text = "PROFILE NOT CREATED";
-            evidenceTextBox.Text = "Create RCM Profile From Loaded CCF before capturing evidence.";
-        }
-        else if (!pin.Testable)
+        if (!pin.Testable)
         {
             voltageRemovedStatusLabel.Text = "NOT TESTABLE";
             voltageAppliedStatusLabel.Text = "NOT TESTABLE";
@@ -487,10 +617,11 @@ public partial class OtmrBenchControl : UserControl
         bool capturing = _captureCoordinator.IsCapturing;
         RcmPinProfile? pin = SelectedProfilePin();
         bool canCapture = _rcmProfile is not null && pin?.Testable == true && !capturing;
-        createRcmProfileButton.Enabled = _document is not null && _definitions.Count > 0 && !capturing;
-        openRcmProfileButton.Enabled = _document is not null && !capturing;
+        createRcmProfileButton.Enabled = _document is not null && !capturing;
+        openRcmProfileButton.Enabled = !capturing;
         saveRcmProfileButton.Enabled = _rcmProfile is not null && !capturing;
-        loadPinMapButton.Enabled = !capturing;
+        saveRcmProfileAsButton.Enabled = _rcmProfile is not null && !capturing;
+        loadPinMapButton.Enabled = _rcmProfile is not null && !capturing;
         refreshCcfButton.Enabled = !capturing;
         connectorComboBox.Enabled = !capturing;
         rcmGrid.Enabled = !capturing;
@@ -499,6 +630,12 @@ public partial class OtmrBenchControl : UserControl
         captureVoltageAppliedButton.Enabled = canCapture;
         compareStatesButton.Enabled = canCapture && pin!.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested;
         resetInputButton.Enabled = _rcmProfile is not null && pin is not null && !capturing;
+        addConnectorButton.Enabled = _rcmProfile is not null && !capturing;
+        renameConnectorButton.Enabled = _rcmProfile is not null && connectorComboBox.SelectedIndex > 0 && !capturing;
+        deleteConnectorButton.Enabled = renameConnectorButton.Enabled;
+        addInputButton.Enabled = _rcmProfile is not null && !capturing;
+        editInputButton.Enabled = pin is not null && !capturing;
+        deleteInputButton.Enabled = pin is not null && !capturing;
     }
 
     private void UpdateProgress()
@@ -511,16 +648,10 @@ public partial class OtmrBenchControl : UserControl
             : $"RCM JSON: {_rcmProfilePath ?? "not saved yet"} | Decoder: NOT VERIFIED";
     }
 
-    private RcmPinProfile? SelectedProfilePin() => FindProfilePin(rcmGrid?.CurrentRow?.Tag as string);
-
-    private RcmPinProfile? FindProfilePin(string? key) => key is null || _rcmProfile is null
-        ? null
-        : _rcmProfile.Pins.SingleOrDefault(pin => string.Equals(pin.Key, key, StringComparison.Ordinal));
-
-    private OtmrBenchPinDefinition? FindDefinition(string? key) => key is null
-        ? null
-        : _definitions.SingleOrDefault(definition =>
-            string.Equals($"{definition.Connector}-{definition.Pin}", key, StringComparison.Ordinal));
+    private RcmPinProfile? SelectedProfilePin() =>
+        rcmGrid?.CurrentRow?.Tag is Guid id && _rcmProfile is not null
+            ? _rcmProfile.Pins.SingleOrDefault(pin => pin.Id == id)
+            : null;
 
     private static string FormatCaptureState(RcmPinProfile pin, RcmElectricalTestState state)
     {
@@ -529,7 +660,9 @@ public partial class OtmrBenchControl : UserControl
         RcmStateEvidence evidence = state == RcmElectricalTestState.VoltageRemoved
             ? pin.VoltageRemoved
             : pin.VoltageApplied24V;
-        return evidence.Tested ? $"CAPTURED | {evidence.FrameCount} frames" : "NOT CAPTURED";
+        if (evidence.Tested)
+            return $"CAPTURED | {evidence.FrameCount} frames";
+        return evidence.NoOtmrData ? "NO OTMR DATA" : "NOT CAPTURED";
     }
 
     private string FormatDifference(RcmPinProfile pin)
@@ -551,25 +684,17 @@ public partial class OtmrBenchControl : UserControl
         return $"records {records} | card {reference.LogicalCard?.ToString() ?? "—"} / ch {reference.LogicalChannel?.ToString() ?? "—"}";
     }
 
-    private static string FormatDefinitionCcf(OtmrBenchPinDefinition definition)
+    private static string FormatRecordPair(RcmCcfReference? reference)
     {
-        string records = definition.ExpectedRecordA is int a
-            ? definition.ExpectedRecordB is int b ? $"{a} ↔ {b}" : a.ToString()
-            : "—";
-        return $"records {records} | card {definition.ExpectedCard?.ToString() ?? "—"} / ch {definition.ExpectedChannel?.ToString() ?? "—"}";
-    }
-
-    private static string FormatRecordPair(RcmCcfReference? reference, OtmrBenchPinDefinition? definition)
-    {
-        int? a = reference?.RecordA ?? definition?.ExpectedRecordA;
-        int? b = reference?.RecordB ?? definition?.ExpectedRecordB;
+        int? a = reference?.RecordA;
+        int? b = reference?.RecordB;
         return a is int recordA ? b is int recordB ? $"{recordA} ↔ {recordB}" : recordA.ToString() : "—";
     }
 
     private static string BuildEvidenceSummary(RcmPinProfile pin)
     {
         static string CaptureSummary(string label, RcmStateEvidence evidence) =>
-            $"{label}: {(evidence.Tested ? "CAPTURED" : "NOT CAPTURED")} | " +
+            $"{label}: {(evidence.Tested ? "CAPTURED" : evidence.NoOtmrData ? "NO OTMR DATA" : "NOT CAPTURED")} | " +
             $"frames {evidence.FrameCount} | stable raw features {evidence.CandidateStableFeatures.Count}\r\n" +
             $"Candidate raw signature: {(string.IsNullOrEmpty(evidence.CandidateRawSignature) ? "—" : evidence.CandidateRawSignature)}";
 

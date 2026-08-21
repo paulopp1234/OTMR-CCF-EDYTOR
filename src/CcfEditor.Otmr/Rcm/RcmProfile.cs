@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CcfEditor.Otmr.Rcm;
 
 public static class RcmResultStates
@@ -32,7 +34,7 @@ public enum RcmElectricalTestState
 
 public sealed class RcmProfile
 {
-    public const string CurrentSchemaVersion = "1.0";
+    public const string CurrentSchemaVersion = "1.1";
 
     public string SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string VehicleType { get; set; } = "Class 171";
@@ -41,20 +43,31 @@ public sealed class RcmProfile
     public long SourceCcfSize { get; set; }
     public DateTimeOffset CreationTimestamp { get; set; }
     public DateTimeOffset LastModifiedTimestamp { get; set; }
+    public List<RcmConnector> Connectors { get; set; } = new();
     public List<RcmPinProfile> Pins { get; set; } = new();
+
+    public RcmPinProfile GetInput(Guid id) => Pins.Single(candidate => candidate.Id == id);
 
     public RcmPinProfile GetPin(string connector, string pin) =>
         Pins.Single(candidate =>
             string.Equals(candidate.Connector, connector, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(candidate.Pin, pin, StringComparison.Ordinal));
 
+    [JsonIgnore]
     public int TestablePinCount => Pins.Count(pin => pin.Testable);
+    [JsonIgnore]
     public int CompletedTestablePinCount => Pins.Count(pin =>
         pin.Testable && pin.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested);
 }
 
+public sealed class RcmConnector
+{
+    public string Name { get; set; } = string.Empty;
+}
+
 public sealed class RcmPinProfile
 {
+    public Guid Id { get; set; } = Guid.NewGuid();
     public string Connector { get; set; } = string.Empty;
     public string Pin { get; set; } = string.Empty;
     public string Function { get; set; } = string.Empty;
@@ -63,6 +76,7 @@ public sealed class RcmPinProfile
     public string PhysicalChannel { get; set; } = string.Empty;
     public string ReturnOrPair { get; set; } = string.Empty;
     public string SafetyClassification { get; set; } = string.Empty;
+    public string Notes { get; set; } = string.Empty;
     public bool Testable { get; set; }
     public RcmCcfReference? CcfReference { get; set; }
     public RcmStateEvidence VoltageRemoved { get; set; } = new();
@@ -70,7 +84,10 @@ public sealed class RcmPinProfile
     public RcmStateComparison Comparison { get; set; } = new();
     public string RcmResult { get; set; } = RcmResultStates.NotTested;
 
-    public string Key => $"{Connector}-{Pin}";
+    [JsonIgnore]
+    public string DisplayKey => string.IsNullOrWhiteSpace(Connector) && string.IsNullOrWhiteSpace(Pin)
+        ? "UNASSIGNED"
+        : $"{Connector}-{Pin}";
 }
 
 public sealed class RcmCcfReference
@@ -90,6 +107,7 @@ public sealed class RcmCcfReference
 public sealed class RcmStateEvidence
 {
     public bool Tested { get; set; }
+    public bool NoOtmrData { get; set; }
     public DateTimeOffset? CaptureStart { get; set; }
     public DateTimeOffset? CaptureStop { get; set; }
     public List<RcmRawFrameEvidence> CompleteRawFrames { get; set; } = new();

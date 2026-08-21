@@ -8,7 +8,8 @@ public sealed class RcmCaptureWindowCoordinator
     private RcmElectricalTestState? _activeState;
 
     public bool IsCapturing => _activePin is not null;
-    public string? ActivePinKey => _activePin?.Key;
+    public Guid? ActiveInputId => _activePin?.Id;
+    public string? ActivePinKey => _activePin?.DisplayKey;
     public RcmElectricalTestState? ActiveState => _activeState;
 
     public void Begin(
@@ -20,7 +21,7 @@ public sealed class RcmCaptureWindowCoordinator
         if (IsCapturing)
             throw new InvalidOperationException("Another RCM capture window is already active.");
         if (!pin.Testable)
-            throw new InvalidOperationException($"{pin.Key} is not a voltage-testable input.");
+            throw new InvalidOperationException($"{pin.DisplayKey} is not a voltage-testable input.");
 
         var evidence = new RcmStateEvidence { CaptureStart = captureStart };
         SetEvidence(pin, state, evidence);
@@ -59,7 +60,8 @@ public sealed class RcmCaptureWindowCoordinator
             throw new ArgumentOutOfRangeException(nameof(captureStop));
 
         evidence.CaptureStop = captureStop;
-        evidence.Tested = true;
+        evidence.Tested = evidence.FrameCount > 0;
+        evidence.NoOtmrData = evidence.FrameCount == 0;
         RcmRawEvidenceAnalyzer.Analyze(evidence);
         pin.Comparison = new RcmStateComparison();
         pin.RcmResult = ResultForCapturedStates(pin);
@@ -78,7 +80,7 @@ public sealed class RcmCaptureWindowCoordinator
     public void Reset(RcmPinProfile pin)
     {
         ArgumentNullException.ThrowIfNull(pin);
-        if (string.Equals(ActivePinKey, pin.Key, StringComparison.Ordinal))
+        if (ActiveInputId == pin.Id)
             throw new InvalidOperationException("Stop the active capture window before resetting this input.");
 
         pin.VoltageRemoved = new RcmStateEvidence();

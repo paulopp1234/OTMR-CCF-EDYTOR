@@ -8,6 +8,13 @@ public static class RcmRawEvidenceAnalyzer
     public static void Analyze(RcmStateEvidence evidence)
     {
         ArgumentNullException.ThrowIfNull(evidence);
+        if (evidence.FrameCount == 0)
+        {
+            evidence.FeatureFrequencies.Clear();
+            evidence.CandidateStableFeatures.Clear();
+            evidence.CandidateRawSignature = string.Empty;
+            return;
+        }
         var frequencies = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (RcmRawFrameEvidence frame in evidence.CompleteRawFrames)
@@ -23,12 +30,10 @@ public static class RcmRawEvidenceAnalyzer
         }
 
         evidence.FeatureFrequencies = frequencies;
-        evidence.CandidateStableFeatures = evidence.FrameCount == 0
-            ? new Dictionary<string, int>(StringComparer.Ordinal)
-            : frequencies
-                .Where(pair => pair.Key.StartsWith("POSITION[", StringComparison.Ordinal) &&
-                               pair.Value == evidence.FrameCount)
-                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        evidence.CandidateStableFeatures = frequencies
+            .Where(pair => pair.Key.StartsWith("POSITION[", StringComparison.Ordinal) &&
+                           pair.Value == evidence.FrameCount)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
 
         string canonical = string.Join(
             "\n",
