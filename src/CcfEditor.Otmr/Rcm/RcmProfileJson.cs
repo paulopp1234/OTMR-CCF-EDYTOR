@@ -47,6 +47,14 @@ public static class RcmProfileJson
         return profile;
     }
 
+    public static string SerializeSnapshot(RcmProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        MigrateAndNormalize(profile);
+        Validate(profile);
+        return JsonSerializer.Serialize(profile, Options);
+    }
+
     public static void EnsureMatchesSource(RcmProfile profile, string sha256, long size)
     {
         ArgumentNullException.ThrowIfNull(profile);
