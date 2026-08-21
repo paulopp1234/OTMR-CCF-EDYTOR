@@ -49,14 +49,10 @@ public sealed record OtmrPendingUpload(
 
 public static class OtmrDatabasePaths
 {
-    public static string DefaultDatabasePath
-    {
-        get
-        {
-            string root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return Path.Combine(root, "OTMR CCF Editor", "Data", "OTMR_RCM.db");
-        }
-    }
+    public const string DefaultRootDirectory = @"C:\OTMR_RCM";
+
+    public static string DefaultDatabasePath =>
+        Path.Combine(DefaultRootDirectory, "OTMR_RCM.db");
 }
 
 /// <summary>
