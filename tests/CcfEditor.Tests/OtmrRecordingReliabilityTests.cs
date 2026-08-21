@@ -105,7 +105,7 @@ public sealed class OtmrRecordingReliabilityTests
     }
 
     [Fact]
-    public async Task TemporarySqliteWriteLock_DoesNotDropQueuedRawBatch()
+    public async Task TransientSqliteInsertFailure_DoesNotDropQueuedRawBatch()
     {
         await WithDatabaseAsync(async path =>
         {
@@ -117,32 +117,41 @@ public sealed class OtmrRecordingReliabilityTests
                 ComPort = "COM8"
             });
 
-            byte[] expected = { 0x01, 0x07, 0xAA, 0x55 };
-            Task stopTask;
-            await using (var blocker = new SqliteConnection($"Data Source={path}"))
+            // Create a deterministic, immediate write failure. This is preferable to
+            // timing a database lock: every INSERT into raw_serial_entries fails until
+            // the trigger is removed, so the test proves the same dequeued batch is
+            // retained and retried rather than silently discarded.
+            await using (var connection = new SqliteConnection($"Data Source={path}"))
             {
-                await blocker.OpenAsync();
-                await using (SqliteCommand begin = blocker.CreateCommand())
-                {
-                    begin.CommandText = "PRAGMA busy_timeout=100; BEGIN IMMEDIATE;";
-                    await begin.ExecuteNonQueryAsync();
-                }
-
-                store.TryRecordRaw(new OtmrCaptureEntry(DateTimeOffset.UtcNow, OtmrDirection.Tx, expected));
-                stopTask = store.StopSessionAsync(DateTimeOffset.UtcNow);
-
-                // The recording store uses a 5-second SQLite busy timeout. Hold the
-                // writer lock long enough to force at least one failed write attempt.
-                await Task.Delay(TimeSpan.FromMilliseconds(5400));
-                Assert.StartsWith("LOCAL_DB_RETRY_", store.GetStatus().SyncState);
-
-                await using SqliteCommand commit = blocker.CreateCommand();
-                commit.CommandText = "COMMIT;";
-                await commit.ExecuteNonQueryAsync();
+                await connection.OpenAsync();
+                await using SqliteCommand createTrigger = connection.CreateCommand();
+                createTrigger.CommandText = """
+                    CREATE TRIGGER reject_test_raw_insert
+                    BEFORE INSERT ON raw_serial_entries
+                    BEGIN
+                        SELECT RAISE(ABORT, 'intentional retry test failure');
+                    END;
+                    """;
+                await createTrigger.ExecuteNonQueryAsync();
             }
 
-            // The competing connection is disposed before waiting for the writer,
-            // so Windows cannot retain an avoidable SQLite file handle in cleanup.
+            byte[] expected = { 0x01, 0x07, 0xAA, 0x55 };
+            store.TryRecordRaw(new OtmrCaptureEntry(DateTimeOffset.UtcNow, OtmrDirection.Tx, expected));
+            Task stopTask = store.StopSessionAsync(DateTimeOffset.UtcNow);
+
+            bool retryObserved = SpinWait.SpinUntil(
+                () => store.GetStatus().SyncState.StartsWith("LOCAL_DB_RETRY_", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5));
+            Assert.True(retryObserved, $"Expected a retry state, actual: {store.GetStatus().SyncState}");
+
+            await using (var connection = new SqliteConnection($"Data Source={path}"))
+            {
+                await connection.OpenAsync();
+                await using SqliteCommand dropTrigger = connection.CreateCommand();
+                dropTrigger.CommandText = "DROP TRIGGER reject_test_raw_insert;";
+                await dropTrigger.ExecuteNonQueryAsync();
+            }
+
             await stopTask.WaitAsync(TimeSpan.FromSeconds(15));
 
             OtmrSessionUploadPackage package = await store.BuildUploadPackageAsync(sessionId);
