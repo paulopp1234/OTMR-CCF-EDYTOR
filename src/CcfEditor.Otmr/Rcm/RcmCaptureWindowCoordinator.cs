@@ -12,6 +12,9 @@ public sealed class RcmCaptureWindowCoordinator
     public string? ActivePinKey => _activePin?.DisplayKey;
     public RcmElectricalTestState? ActiveState => _activeState;
 
+    public event EventHandler<RcmCaptureCompletedEventArgs>? CaptureCompleted;
+    public event EventHandler<RcmComparisonCompletedEventArgs>? ComparisonCompleted;
+
     public void Begin(
         RcmPinProfile pin,
         RcmElectricalTestState state,
@@ -57,7 +60,8 @@ public sealed class RcmCaptureWindowCoordinator
             throw new InvalidOperationException("No RCM capture window is active.");
 
         RcmPinProfile pin = _activePin;
-        RcmStateEvidence evidence = GetEvidence(pin, _activeState.Value);
+        RcmElectricalTestState state = _activeState.Value;
+        RcmStateEvidence evidence = GetEvidence(pin, state);
         if (captureStop < evidence.CaptureStart)
             throw new ArgumentOutOfRangeException(nameof(captureStop));
 
@@ -69,14 +73,18 @@ public sealed class RcmCaptureWindowCoordinator
         pin.RcmResult = ResultForCapturedStates(pin);
         _activePin = null;
         _activeState = null;
+
+        CaptureCompleted?.Invoke(this, new RcmCaptureCompletedEventArgs(pin, state, evidence));
         return evidence;
     }
 
     public void Compare(RcmPinProfile pin, DateTimeOffset comparedAt)
     {
+        ArgumentNullException.ThrowIfNull(pin);
         if (IsCapturing)
             throw new InvalidOperationException("Stop the active capture window before comparing states.");
         RcmStateComparer.Compare(pin, comparedAt);
+        ComparisonCompleted?.Invoke(this, new RcmComparisonCompletedEventArgs(pin));
     }
 
     public void Reset(RcmPinProfile pin)
@@ -118,4 +126,29 @@ public sealed class RcmCaptureWindowCoordinator
         else
             pin.VoltageApplied24V = evidence;
     }
+}
+
+public sealed class RcmCaptureCompletedEventArgs : EventArgs
+{
+    public RcmCaptureCompletedEventArgs(
+        RcmPinProfile pin,
+        RcmElectricalTestState state,
+        RcmStateEvidence evidence)
+    {
+        Pin = pin ?? throw new ArgumentNullException(nameof(pin));
+        State = state;
+        Evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
+    }
+
+    public RcmPinProfile Pin { get; }
+    public RcmElectricalTestState State { get; }
+    public RcmStateEvidence Evidence { get; }
+}
+
+public sealed class RcmComparisonCompletedEventArgs : EventArgs
+{
+    public RcmComparisonCompletedEventArgs(RcmPinProfile pin) =>
+        Pin = pin ?? throw new ArgumentNullException(nameof(pin));
+
+    public RcmPinProfile Pin { get; }
 }
