@@ -1,0 +1,41 @@
+Connector	Pin	Role	MIO	Channel	ExpectedFunction	ReturnOrPair	SafetyInstruction	IsVoltageTestPoint	ExpectedRecordA	ExpectedRecordB	ExpectedCard	ExpectedChannel	EvidenceStatus	Source
+J1	A	Digital input	1	1	Throttle 1	J1-L	Bench input; use J1-L common return	true	0	12	0	0	PASS — fixed CCF	Bench proven. Source: 3EER300003-7800; 12-wide pair confirmed on real 171.
+J1	B	Digital input	1	2	Throttle 2	J1-L	Bench input; use J1-L common return	true	1	13	0	1	PASS — fixed CCF	Source: 3EER300003-7800; pair 1↔13 proven in live log.
+J1	C	Digital input	1	3	Throttle 3	J1-L	Bench input; use J1-L common return	true	2	14	0	2	PASS — fixed CCF	Source: 3EER300003-7800; pair 2↔14 proven in live log.
+J1	D	Digital input	1	4	Forward	J1-L	Bench input; use J1-L common return	true	3	15	0	3	PASS — fixed CCF	Source: 3EER300003-7800. Event pair is working expectation from proven 12-wide pattern.
+J1	E	Digital input	1	5	Reverse	J1-L	Bench input; use J1-L common return	true	4	16	0	4	PASS — fixed CCF	Source: 3EER300003-7800. Event pair is working expectation from proven 12-wide pattern.
+J1	F	Digital input	1	6	DRA Set	J1-L	Bench input; use J1-L common return	true	5	17	0	5	PASS — fixed CCF	Source: 3EER300003-7800. Event pair is working expectation from proven 12-wide pattern.
+J1	G	Digital input	1	7	Occupied Cab	J1-L	Bench input; use J1-L common return	true	6	18	0	6	PASS — fixed CCF	Source: 3EER300003-7800. Event pair is working expectation from proven 12-wide pattern.
+J1	H	Digital input	1	8	Passenger Communication Override	J1-L	Bench input; use J1-L common return	true	7	19	0	7	PASS — fixed CCF	Source: 3EER300003-7800; wire corrected to TC2701.
+J1	J	Digital input	1	9	Driver's Emergency Brake	J1-L	Bench input; use J1-L common return	true	8	20	0	8	PASS — fixed CCF	Source: 3EER300003-7800.
+J1	K	Digital input	1	10	Warning Horn	J1-L	Bench input; use J1-L common return	true	9	21	0	9	PASS — fixed CCF	Source: 3EER300003-7800.
+J1	L	Common return	1	1–10	0V common for MIO1 ch1–10	—	RETURN — do not apply +V	false					REFERENCE ONLY	Source: 3EER300003-7800.
+J1	M	Isolated digital input	1	11	Brake 1	J1-N	Bench input; use J1-N isolated return	true	10	22	0	10	PASS — fixed CCF	Source: 3EER300003-7800.
+J1	N	Isolated return	1	11	Brake 1 isolated return	J1-M	RETURN — do not apply +V	false					REFERENCE ONLY	Source: 3EER300003-7800.
+J1	O	Isolated digital input	1	12	LK-OM8	J1-P	Function name unresolved; bench only if intentionally tracing	true	11	23	0	11	PASS — fixed CCF	Source: 3EER300003-7800; physical input proved, exact function open.
+J1	P	Isolated return	1	12	Return for J1-O / MIO1 ch12	J1-O	RETURN — do not apply +V	false					REFERENCE ONLY	Source: 3EER300003-7800.
+J1	R	Digital input (MIO5 bank)	5	1	AWS Horn	J1-x	Bench input only after MIO5/card join is confirmed	true	124	136	4	4	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch1 order inferred.
+J1	U	Digital input (MIO5 bank)	5	2	AWS Bell	J1-x	Bench input only after MIO5/card join is confirmed	true	125	137	4	5	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch2 order inferred.
+J1	b	Digital input (MIO5 bank)	5	3	AWS Cancellation	J1-x	Bench input only after MIO5/card join is confirmed	true	126	138	4	6	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch3 order inferred.
+J1	c	Digital input (MIO5 bank)	5	4	AWS 'B' Coil	J1-x	Bench input only after MIO5/card join is confirmed	true	127	139	4	7	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch4 order inferred.
+J1	d	Digital input (MIO5 bank)	5	5	Wrong Direction Loop	J1-x	Bench input only after MIO5/card join is confirmed	true	128	140	0	12	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch5 order inferred.
+J1	e	Digital input (MIO5 bank)	5	6	Normal Direction Loop	J1-x	Bench input only after MIO5/card join is confirmed	true	129	141	4	9	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch6 order inferred.
+J1	f	Digital input (MIO5 bank)	5	7	TSO Active	J1-x	Bench input only after MIO5/card join is confirmed	true	130	142	4	10	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch7 order inferred.
+J1	g	Digital input (MIO5 bank)	5	8	TI / Fault Indicator	J1-x	Bench input only after MIO5/card join is confirmed	true	131	143	4	11	PASS — fixed CCF	Source: 3EER300003-7800; pin/function direct, ch8 order inferred.
+J1	x	Common return	5	1–8 bank	0V common for shown AWS/TPWS bank	—	RETURN — do not apply +V	false					REFERENCE ONLY	Source: 3EER300003-7800.
+J1	y	Vehicle supply	5	Supply area	Vehicle supply associated with MIO5 area	—	SUPPLY — DO NOT BRIDGE / DO NOT USE AS TEST INPUT	false					DO NOT TEST	Source: 3EER300003-7800.
+J1	z	0V / supply return	5	Supply area	0V associated with MIO5 area	—	0V / RETURN — do not apply +V	false					REFERENCE ONLY	Source: 3EER300003-7800.
+J1	j	RS485 communications	5	14	PIS RS485 — RXD-	J1-k / J1-m 0V	RS485 — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST WITH 24V	Source: 3EER300003-7801; physical PIS wiring direct; ch14 assignment very strong.
+J1	k	RS485 communications	5	14	PIS RS485 — RXD+	J1-j / J1-m 0V	RS485 — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST WITH 24V	Source: 3EER300003-7801; physical PIS wiring direct; ch14 assignment very strong.
+J1	m	RS485 reference	5	14	PIS RS485 0V reference	J1-j/k	REFERENCE — DO NOT APPLY +V	false					REFERENCE ONLY	Source: 3EER300003-7801.
+J1	n	RS485 communications	4	14	MI-TRAC RS485 differential pair to RVI-CTV2	J1-p	RS485 — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST WITH 24V	Source: 3EER300003-7790 + 7801; physical link direct.
+J1	p	RS485 communications	4	14	MI-TRAC RS485 differential pair to RVI-CTV2	J1-n	RS485 — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST WITH 24V	Source: 3EER300003-7790 + 7801; physical link direct.
+J1	r	RS485 termination link	4	14	MI-TRAC termination link point	J1-s/W/X	LINK / TERMINATION — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST	Source: 3EER300003-7801.
+J1	s	RS485 termination link	4	14	MI-TRAC termination link point	J1-r/W/X	LINK / TERMINATION — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST	Source: 3EER300003-7801.
+J1	W	RS485 termination link	4	14	MI-TRAC termination link point	J1-r/s/X	LINK / TERMINATION — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST	Source: 3EER300003-7801.
+J1	X	RS485 termination link	4	14	MI-TRAC termination link point	J1-r/s/W	LINK / TERMINATION — DO NOT APPLY TEST VOLTAGE	false					DO NOT TEST	Source: 3EER300003-7801.
+J1	u	Special / unresolved	1	Unknown (13–15 area)	Special MIO1 pair from TBL-NDS / Tripcock area	J1-v	UNKNOWN/SPECIAL — DO NOT STIMULATE until function/channel resolved	false					DO NOT TEST YET	Source: 3EER300003-7801; physical pair seen, exact channel/function open.
+J1	v	Special / unresolved	1	Unknown (13–15 area)	Special MIO1 pair from TBL-NDS / Tripcock area	J1-u	UNKNOWN/SPECIAL — DO NOT STIMULATE until function/channel resolved	false					DO NOT TEST YET	Source: 3EER300003-7801; physical pair seen, exact channel/function open.
+J2	A	Digital input candidate	Unresolved (MIO2/3/4)	ch1 / logical ch0 candidate	Headlight Left	NOT_PROVED	BENCH CANDIDATE — verify designated return and wiring before applying stimulus; mapping is not yet proven	true					UNMAPPED — bench discovery	J2 mapping deliberately unresolved. Candidate logical channel 0 records from current bench plan: 78=card1/ch0, 92=card2/ch0, 42=card3/ch0. Do not assign a card until live bench observation proves it.
+J2	Q	Digital input candidate	Unresolved (MIO2/3/4)	ch1 / logical ch0 candidate	Fire Alarm Isolation	NOT_PROVED	BENCH CANDIDATE — verify designated return and wiring before applying stimulus; mapping is not yet proven	true					UNMAPPED — bench discovery	J2 mapping deliberately unresolved. Candidate logical channel 0 records from current bench plan: 78=card1/ch0, 92=card2/ch0, 42=card3/ch0. Do not assign a card until live bench observation proves it.
+J2	f	Digital input candidate	Unresolved (MIO2/3/4)	ch1 / logical ch0 candidate	Wheelslide	NOT_PROVED	BENCH CANDIDATE — verify designated return and wiring before applying stimulus; mapping is not yet proven	true					UNMAPPED — bench discovery	J2 mapping deliberately unresolved. Candidate logical channel 0 records from current bench plan: 78=card1/ch0, 92=card2/ch0, 42=card3/ch0. Do not assign a card until live bench observation proves it.
