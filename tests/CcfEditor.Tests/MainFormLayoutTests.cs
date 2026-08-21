@@ -69,15 +69,18 @@ public sealed class MainFormLayoutTests
 
                 tabs.SelectedIndex = 5;
                 Application.DoEvents();
-                AssertVisibleText(tabs.SelectedTab!, "Profile: Class 171");
+                AssertVisibleText(tabs.SelectedTab!, "RCM: Class 171");
                 AssertVisibleText(tabs.SelectedTab!, "Load Pin Map...");
                 AssertVisibleText(tabs.SelectedTab!, "Refresh CCF");
-                AssertVisibleText(tabs.SelectedTab!, "Arm Selected Pin");
-                AssertVisibleText(tabs.SelectedTab!, "Stop Observation");
-                AssertVisibleText(tabs.SelectedTab!, "Save Observation Session...");
-                AssertVisibleText(tabs.SelectedTab!, "Clear Observations");
+                AssertVisibleText(tabs.SelectedTab!, "Create RCM Profile From Loaded CCF");
+                AssertVisibleText(tabs.SelectedTab!, "Open RCM Profile");
+                AssertVisibleText(tabs.SelectedTab!, "Save RCM Profile");
+                AssertVisibleText(tabs.SelectedTab!, "Capture Voltage Removed");
+                AssertVisibleText(tabs.SelectedTab!, "Capture +24V Applied");
+                AssertVisibleText(tabs.SelectedTab!, "Compare States");
+                AssertVisibleText(tabs.SelectedTab!, "Reset This Input");
 
-                DataGridView benchGrid = Find<DataGridView>(form, "benchGrid");
+                DataGridView benchGrid = Find<DataGridView>(form, "rcmGrid");
                 Assert.True(benchGrid.Width >= 600,
                     $"The bench pin table is collapsed to {benchGrid.Width}px and cannot display its columns.");
                 Assert.NotEmpty(benchGrid.Rows.Cast<DataGridViewRow>());
@@ -94,7 +97,7 @@ public sealed class MainFormLayoutTests
     }
 
     [Fact]
-    public void ArmedPin_ImmediatelyShowsWaitingAndRealFramesBecomeRawEvidenceOnly()
+    public void RcmWorkflowEnablesCapturesOnlyForProfiledTestablePins()
     {
         RunInStaThread(() =>
         {
@@ -113,52 +116,43 @@ public sealed class MainFormLayoutTests
             tabs.SelectedIndex = 5;
             Application.DoEvents();
 
-            DataGridView benchGrid = Find<DataGridView>(form, "benchGrid");
+            DataGridView benchGrid = Find<DataGridView>(form, "rcmGrid");
             DataGridViewRow j1a = benchGrid.Rows.Cast<DataGridViewRow>()
                 .Single(row => string.Equals(Convert.ToString(row.Cells["pinColumn"].Value), "A", StringComparison.Ordinal));
             benchGrid.CurrentCell = j1a.Cells[0];
             j1a.Selected = true;
-            Assert.False(Find<Button>(form, "saveObservationButton").Enabled);
-            Find<Button>(form, "armSelectedButton").PerformClick();
             Application.DoEvents();
 
-            TextBox details = Find<TextBox>(form, "detailsTextBox");
-            Assert.Contains("ARMED J1-A", details.Text, StringComparison.Ordinal);
-            Assert.Contains("Throttle 1", details.Text, StringComparison.Ordinal);
-            Assert.Contains("Expected records: 0 ↔ 12", details.Text, StringComparison.Ordinal);
-            Assert.Contains("Waiting for live transition", details.Text, StringComparison.Ordinal);
-            j1a = benchGrid.Rows.Cast<DataGridViewRow>()
-                .Single(row => string.Equals(Convert.ToString(row.Cells[0].Value), "A", StringComparison.Ordinal));
-            Assert.Equal("ARMED - WAITING", Convert.ToString(j1a.Cells[12].Value));
-
-            var assembler = new OtmrLiveFrameAssembler();
-            OtmrLiveFrame first = Assert.Single(assembler.Append(new byte[] { 0xFB, 0xFB, 0x38, 0x4A, 0xFF }));
-            ReportFrame(form, new DateTimeOffset(2026, 8, 21, 8, 50, 17, TimeSpan.Zero), first);
-            OtmrLiveFrame second = Assert.Single(assembler.Append(new byte[] { 0xFB, 0xFB, 0x38, 0x4B, 0xFF }));
-            ReportFrame(form, new DateTimeOffset(2026, 8, 21, 8, 50, 18, TimeSpan.Zero), second);
+            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Find<Button>(form, "createRcmProfileButton").PerformClick();
             Application.DoEvents();
 
-            j1a = benchGrid.Rows.Cast<DataGridViewRow>()
-                .Single(row => string.Equals(Convert.ToString(row.Cells[0].Value), "A", StringComparison.Ordinal));
-            Assert.Equal("No decoded record | raw frames: 2", Convert.ToString(j1a.Cells[10].Value));
-            Assert.Equal("RAW #2", Convert.ToString(j1a.Cells[11].Value));
-            Assert.Equal("ARMED - RAW OBSERVATION", Convert.ToString(j1a.Cells[12].Value));
-            Assert.DoesNotContain("LIVE MATCH", Convert.ToString(j1a.Cells[12].Value), StringComparison.Ordinal);
-            Assert.Contains("Last raw frame: FB FB 38 4B FF", details.Text, StringComparison.Ordinal);
-            Assert.Contains("CANDIDATE RAW DELTA: @03:4A→4B", details.Text, StringComparison.Ordinal);
-            Assert.Contains("Raw frames since arming: 2", details.Text, StringComparison.Ordinal);
+            Label selected = Find<Label>(form, "selectedPinLabel");
+            Assert.Contains("J1-A", selected.Text, StringComparison.Ordinal);
+            Assert.Contains("Throttle 1", selected.Text, StringComparison.Ordinal);
+            Assert.Contains("Expected CCF records: 0 ↔ 12", selected.Text, StringComparison.Ordinal);
+            Assert.Contains("Card 0 / Channel 0", selected.Text, StringComparison.Ordinal);
+            Assert.True(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.True(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.False(Find<Button>(form, "compareStatesButton").Enabled);
+            Assert.True(Find<Button>(form, "saveRcmProfileButton").Enabled);
 
-            Find<Button>(form, "stopObservationButton").PerformClick();
-            Application.DoEvents();
-            Assert.True(Find<Button>(form, "saveObservationButton").Enabled);
-            Assert.True(Find<Button>(form, "armSelectedButton").Enabled);
             j1a = benchGrid.Rows.Cast<DataGridViewRow>()
-                .Single(row => string.Equals(Convert.ToString(row.Cells[0].Value), "A", StringComparison.Ordinal));
-            Assert.Equal("RAW OBSERVATION STOPPED", Convert.ToString(j1a.Cells[12].Value));
-            Assert.Contains(
-                "2 complete raw frame(s) retained",
-                Find<Label>(tabs.SelectedTab!, "statusLabel").Text,
-                StringComparison.Ordinal);
+                .Single(row => string.Equals(Convert.ToString(row.Cells[0].Value), "L", StringComparison.Ordinal));
+            benchGrid.ClearSelection();
+            j1a.Selected = true;
+            benchGrid.CurrentCell = j1a.Cells[0];
+            Application.DoEvents();
+
+            Assert.Equal("L", Convert.ToString(benchGrid.CurrentRow?.Cells[0].Value));
+            Assert.Contains("J1-L", selected.Text, StringComparison.Ordinal);
+            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.Equal("NOT TESTABLE", Convert.ToString(j1a.Cells[3].Value));
+            Assert.Equal("NOT TESTABLE", Convert.ToString(j1a.Cells[4].Value));
+            Assert.Equal("NOT TESTABLE", Convert.ToString(j1a.Cells[7].Value));
+            Assert.Contains("NOT TESTABLE", Find<TextBox>(form, "evidenceTextBox").Text, StringComparison.Ordinal);
             Assert.Equal(sourceBefore, File.ReadAllBytes(ccfPath));
         });
     }
@@ -167,11 +161,6 @@ public sealed class MainFormLayoutTests
         typeof(MainForm)
             .GetMethod("LoadCcf", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(form, new object[] { path });
-
-    private static void ReportFrame(MainForm form, DateTimeOffset timestamp, OtmrLiveFrame frame) =>
-        typeof(MainForm)
-            .GetMethod("ReportOtmrLiveFrame", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(form, new object[] { timestamp, frame });
 
     private static T Find<T>(Control root, string name) where T : Control
     {

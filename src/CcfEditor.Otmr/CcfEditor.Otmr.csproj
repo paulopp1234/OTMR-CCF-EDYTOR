@@ -8,4 +8,8 @@
   <ItemGroup>
     <PackageReference Include="System.IO.Ports" Version="8.0.0" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CcfEditor.Core\CcfEditor.Core.csproj" />
+  </ItemGroup>
 </Project>

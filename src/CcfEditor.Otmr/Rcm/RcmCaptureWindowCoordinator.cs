@@ -1,0 +1,115 @@
+using CcfEditor.Otmr.Live;
+
+namespace CcfEditor.Otmr.Rcm;
+
+public sealed class RcmCaptureWindowCoordinator
+{
+    private RcmPinProfile? _activePin;
+    private RcmElectricalTestState? _activeState;
+
+    public bool IsCapturing => _activePin is not null;
+    public string? ActivePinKey => _activePin?.Key;
+    public RcmElectricalTestState? ActiveState => _activeState;
+
+    public void Begin(
+        RcmPinProfile pin,
+        RcmElectricalTestState state,
+        DateTimeOffset captureStart)
+    {
+        ArgumentNullException.ThrowIfNull(pin);
+        if (IsCapturing)
+            throw new InvalidOperationException("Another RCM capture window is already active.");
+        if (!pin.Testable)
+            throw new InvalidOperationException($"{pin.Key} is not a voltage-testable input.");
+
+        var evidence = new RcmStateEvidence { CaptureStart = captureStart };
+        SetEvidence(pin, state, evidence);
+        pin.Comparison = new RcmStateComparison();
+        pin.RcmResult = ResultForCapturedStates(pin);
+        _activePin = pin;
+        _activeState = state;
+    }
+
+    public bool AddFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (_activePin is null || _activeState is null)
+            return false;
+
+        RcmStateEvidence evidence = GetEvidence(_activePin, _activeState.Value);
+        byte[] bytes = frame.GetDataSnapshot();
+        evidence.CompleteRawFrames.Add(new RcmRawFrameEvidence
+        {
+            SequenceNumber = evidence.CompleteRawFrames.Count + 1,
+            Timestamp = timestamp,
+            RawFrameHex = frame.Hex,
+            RawFrameBytes = bytes.Select(value => (int)value).ToList()
+        });
+        return true;
+    }
+
+    public RcmStateEvidence Stop(DateTimeOffset captureStop)
+    {
+        if (_activePin is null || _activeState is null)
+            throw new InvalidOperationException("No RCM capture window is active.");
+
+        RcmPinProfile pin = _activePin;
+        RcmStateEvidence evidence = GetEvidence(pin, _activeState.Value);
+        if (captureStop < evidence.CaptureStart)
+            throw new ArgumentOutOfRangeException(nameof(captureStop));
+
+        evidence.CaptureStop = captureStop;
+        evidence.Tested = true;
+        RcmRawEvidenceAnalyzer.Analyze(evidence);
+        pin.Comparison = new RcmStateComparison();
+        pin.RcmResult = ResultForCapturedStates(pin);
+        _activePin = null;
+        _activeState = null;
+        return evidence;
+    }
+
+    public void Compare(RcmPinProfile pin, DateTimeOffset comparedAt)
+    {
+        if (IsCapturing)
+            throw new InvalidOperationException("Stop the active capture window before comparing states.");
+        RcmStateComparer.Compare(pin, comparedAt);
+    }
+
+    public void Reset(RcmPinProfile pin)
+    {
+        ArgumentNullException.ThrowIfNull(pin);
+        if (string.Equals(ActivePinKey, pin.Key, StringComparison.Ordinal))
+            throw new InvalidOperationException("Stop the active capture window before resetting this input.");
+
+        pin.VoltageRemoved = new RcmStateEvidence();
+        pin.VoltageApplied24V = new RcmStateEvidence();
+        pin.Comparison = new RcmStateComparison();
+        pin.RcmResult = pin.Testable ? RcmResultStates.NotTested : RcmResultStates.NotTestable;
+    }
+
+    public static string ResultForCapturedStates(RcmPinProfile pin)
+    {
+        if (!pin.Testable)
+            return RcmResultStates.NotTestable;
+        if (pin.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested)
+            return RcmResultStates.BothStatesCaptured;
+        if (pin.VoltageRemoved.Tested)
+            return RcmResultStates.VoltageRemovedCaptured;
+        if (pin.VoltageApplied24V.Tested)
+            return RcmResultStates.VoltageApplied24VCaptured;
+        return RcmResultStates.NotTested;
+    }
+
+    private static RcmStateEvidence GetEvidence(RcmPinProfile pin, RcmElectricalTestState state) =>
+        state == RcmElectricalTestState.VoltageRemoved
+            ? pin.VoltageRemoved
+            : pin.VoltageApplied24V;
+
+    private static void SetEvidence(RcmPinProfile pin, RcmElectricalTestState state, RcmStateEvidence evidence)
+    {
+        if (state == RcmElectricalTestState.VoltageRemoved)
+            pin.VoltageRemoved = evidence;
+        else
+            pin.VoltageApplied24V = evidence;
+    }
+}

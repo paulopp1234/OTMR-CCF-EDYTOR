@@ -2,84 +2,42 @@ using System.ComponentModel;
 using CcfEditor.Core;
 using CcfEditor.Otmr.Bench;
 using CcfEditor.Otmr.Live;
+using CcfEditor.Otmr.Rcm;
 
 namespace CcfEditor.WinForms;
 
 public partial class OtmrBenchControl : UserControl
 {
     private readonly List<OtmrBenchPinDefinition> _definitions = new();
-    private readonly Dictionary<string, BenchObservation> _observations = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, OtmrBenchObservationSession> _rawObservations = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<OtmrBenchObservationSession> _completedSessions = new();
+    private readonly RcmCaptureWindowCoordinator _captureCoordinator = new();
     private CcfDocument? _document;
-    private string? _armedKey;
-    private OtmrBenchObservationSession? _activeSession;
-    private OtmrBenchObservationSession? _lastCompletedSession;
-    private string? _profilePath;
-    private int _totalRawFrameCount;
+    private RcmProfile? _rcmProfile;
+    private string? _rcmProfilePath;
+    private string? _pinMapPath;
+    private bool _closing;
 
     public OtmrBenchControl()
     {
         InitializeComponent();
 
         if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
-        {
-            LoadBundledProfile();
-        }
-        else
-        {
-            profileStatusLabel.Text = "Pin map: design-time preview";
-            decoderStatusLabel.Text = "Live record detection: runtime only";
-        }
+            LoadBundledPinMap();
+        UpdateWorkflow();
     }
 
     protected override void OnVisibleChanged(EventArgs e)
     {
         base.OnVisibleChanged(e);
-
-        if (LicenseManager.UsageMode == LicenseUsageMode.Designtime)
+        if (LicenseManager.UsageMode == LicenseUsageMode.Designtime || !Visible || IsDisposed)
             return;
-
-        if (!Visible || IsDisposed || ccfStatusLabel is null || benchGrid is null)
-            return;
-
         RefreshCcfFromHost();
-    }
-
-    public void ReportLiveSignalActivity(OtmrBenchLiveActivity activity)
-    {
-        ArgumentNullException.ThrowIfNull(activity);
-
-        if (InvokeRequired)
-        {
-            BeginInvoke((Action)(() => ReportLiveSignalActivity(activity)));
-            return;
-        }
-
-        if (_armedKey is not null)
-        {
-            AddObservation(_armedKey, activity);
-        }
-        else
-        {
-            foreach (OtmrBenchPinDefinition definition in _definitions.Where(definition =>
-                         definition.ExpectedRecordA == activity.RecordIndex ||
-                         definition.ExpectedRecordB == activity.RecordIndex))
-            {
-                AddObservation(Key(definition), activity);
-            }
-        }
-
-        RenderConnector(_armedKey);
-        decoderStatusLabel.Text = "Live record detection: VERIFIED DECODED EVENT RECEIVED";
-        statusLabel.Text = _armedKey is null
-            ? $"Observed decoded record {activity.RecordIndex}."
-            : $"Armed pin {_armedKey}: observed decoded record {activity.RecordIndex}.";
     }
 
     public void ReportRawLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
+        if (_closing || IsDisposed)
+            return;
 
         if (InvokeRequired)
         {
@@ -87,136 +45,69 @@ public partial class OtmrBenchControl : UserControl
             return;
         }
 
-        _totalRawFrameCount++;
-        if (_armedKey is null)
-        {
-            decoderStatusLabel.Text = $"Live framing: {_totalRawFrameCount} complete raw frame(s); event decoder not proven";
+        if (!_captureCoordinator.AddFrame(timestamp, frame))
             return;
-        }
 
-        if (_activeSession is null)
-        {
-            statusLabel.Text = $"ARMED {_armedKey}: no active raw observation session is available.";
-            return;
-        }
-
-        _activeSession.AddFrame(timestamp, frame);
-        OtmrBenchObservationSession observation = _activeSession;
-        string armedKey = _armedKey;
-        RenderConnector(armedKey);
-        decoderStatusLabel.Text = "Live record detection: ARMED - RAW OBSERVATION; event decoder not proven";
+        UpdateCaptureStatusOnly();
         statusLabel.Text =
-            $"ARMED {armedKey}: received complete raw frame #{observation.FrameCount} at " +
-            $"{timestamp.ToLocalTime():HH:mm:ss.fff}. No record/value mapping has been claimed.";
+            $"CAPTURING {_captureCoordinator.ActivePinKey}: complete frame retained at " +
+            $"{timestamp.ToLocalTime():HH:mm:ss.fff}. Raw evidence only; decoder NOT VERIFIED.";
     }
 
-    private void AddObservation(string key, OtmrBenchLiveActivity activity)
-    {
-        if (!_observations.TryGetValue(key, out BenchObservation? observation))
-        {
-            observation = new BenchObservation();
-            _observations.Add(key, observation);
-        }
-
-        observation.Add(activity);
-    }
-
-    private void LoadBundledProfile()
+    private void LoadBundledPinMap()
     {
         string path = Path.Combine(
             AppContext.BaseDirectory,
             "Profiles",
             "Class171",
             "Class171_Bench_PinMap.tsv");
-
         if (!File.Exists(path))
         {
-            profileStatusLabel.Text = "Pin map: bundled Class 171 profile not found";
-            statusLabel.Text = $"Expected external pin map was not found: {path}";
+            statusLabel.Text = $"Class 171 physical pin map was not found: {path}";
             return;
         }
 
-        try
-        {
-            LoadProfile(path);
-        }
-        catch (Exception ex)
-        {
-            profileStatusLabel.Text = "Pin map: load failed";
-            statusLabel.Text = ex.Message;
-        }
+        LoadPinMap(path);
     }
 
-    private void LoadProfile(string path)
+    private void LoadPinMap(string path)
     {
         IReadOnlyList<OtmrBenchPinDefinition> loaded = OtmrBenchProfileReader.LoadTsv(path);
         _definitions.Clear();
         _definitions.AddRange(loaded);
-        _profilePath = path;
-        _armedKey = null;
-        _observations.Clear();
-        _rawObservations.Clear();
-        _completedSessions.Clear();
-        _activeSession = null;
-        _lastCompletedSession = null;
-        _totalRawFrameCount = 0;
-        armSelectedButton.Enabled = true;
-        stopObservationButton.Enabled = false;
-        saveObservationButton.Enabled = false;
-
-        string? previousConnector = connectorComboBox.SelectedItem as string;
-        string[] connectors = _definitions
-            .Select(definition => definition.Connector)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        connectorComboBox.BeginUpdate();
-        try
-        {
-            connectorComboBox.Items.Clear();
-            connectorComboBox.Items.AddRange(connectors);
-            if (previousConnector is not null && connectors.Contains(previousConnector, StringComparer.OrdinalIgnoreCase))
-                connectorComboBox.SelectedItem = connectors.First(value => string.Equals(value, previousConnector, StringComparison.OrdinalIgnoreCase));
-            else if (connectors.Length > 0)
-                connectorComboBox.SelectedIndex = 0;
-        }
-        finally
-        {
-            connectorComboBox.EndUpdate();
-        }
-
-        int j1 = _definitions.Count(definition => string.Equals(definition.Connector, "J1", StringComparison.OrdinalIgnoreCase));
-        int j2 = _definitions.Count(definition => string.Equals(definition.Connector, "J2", StringComparison.OrdinalIgnoreCase));
-        profileStatusLabel.Text = $"External pin map: {Path.GetFileName(path)} | J1 {j1} rows | J2 {j2} rows";
-        RenderConnector();
+        _pinMapPath = path;
+        pinMapStatusLabel.Text =
+            $"Physical pin map: {Path.GetFileName(path)} | " +
+            $"{_definitions.Count(definition => definition.IsVoltageTestPoint)} testable / {_definitions.Count} total";
+        PopulateConnectors();
+        RenderTable();
     }
 
-    private void LoadProfileButton_Click(object? sender, EventArgs e)
+    private void LoadPinMapButton_Click(object? sender, EventArgs e)
     {
+        if (_captureCoordinator.IsCapturing)
+            return;
+
         using var dialog = new OpenFileDialog
         {
             Filter = "OTMR bench pin maps (*.tsv)|*.tsv|All files (*.*)|*.*",
-            Title = "Load external OTMR bench pin map",
+            Title = "Load Class 171 physical pin map",
             CheckFileExists = true,
             Multiselect = false
         };
-
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
 
         try
         {
-            LoadProfile(dialog.FileName);
-            statusLabel.Text = "External bench pin map loaded.";
+            LoadPinMap(dialog.FileName);
+            statusLabel.Text = "Physical pin map loaded. Create a new RCM profile to use it.";
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Unable to load bench pin map", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, ex.Message, "Unable to load pin map", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
-
-    private void ConnectorComboBox_SelectedIndexChanged(object? sender, EventArgs e) => RenderConnector();
 
     private void RefreshCcfButton_Click(object? sender, EventArgs e) => RefreshCcfFromHost();
 
@@ -225,343 +116,492 @@ public partial class OtmrBenchControl : UserControl
         _document = (FindForm() as MainForm)?.GetCurrentCcfForBench();
         ccfStatusLabel.Text = _document is null
             ? "CCF: none loaded"
-            : $"CCF: {Path.GetFileName(_document.SourcePath ?? "opened CCF")} | working bytes";
-        RenderConnector();
+            : $"CCF: {Path.GetFileName(_document.SourcePath ?? "opened CCF")} | " +
+              $"{_document.Length:N0} bytes | SHA-256 {_document.OriginalSha256[..12]}…";
+        UpdateCommandAvailability();
+        RenderTable();
     }
 
-    private void ArmSelectedButton_Click(object? sender, EventArgs e)
+    private void CreateRcmProfileButton_Click(object? sender, EventArgs e)
     {
-        if (benchGrid.CurrentRow?.Tag is not OtmrBenchPinDefinition definition)
+        if (_document is null)
         {
-            MessageBox.Show(this, "Select a connector pin row first.", "OTMR I/O Bench", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Load a CCF before creating an RCM profile.", "RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (_definitions.Count == 0)
+        {
+            MessageBox.Show(this, "Load the Class 171 physical pin map first.", "RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        if (!definition.IsVoltageTestPoint)
-        {
-            MessageBox.Show(
-                this,
-                $"{definition.Connector}-{definition.Pin} is not classified as a voltage-test input.{Environment.NewLine}{Environment.NewLine}" +
-                definition.SafetyInstruction,
-                "Do not stimulate this pin",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-            return;
-        }
-
-        _armedKey = Key(definition);
-        _observations.Remove(_armedKey);
-        _activeSession = new OtmrBenchObservationSession(
-            definition.Connector,
-            definition.Pin,
-            definition.ExpectedFunction,
-            definition.ExpectedRecordA,
-            definition.ExpectedRecordB,
-            DateTimeOffset.Now);
-        _rawObservations[_armedKey] = _activeSession;
-        armSelectedButton.Enabled = false;
-        stopObservationButton.Enabled = true;
-        saveObservationButton.Enabled = false;
-        RenderConnector(_armedKey);
-        decoderStatusLabel.Text = "Live record detection: ARMED - RAW OBSERVATION; event decoder not proven";
+        _rcmProfile = RcmProfileFactory.Create(_document, _definitions, "Class 171", DateTimeOffset.Now);
+        _rcmProfilePath = null;
+        PopulateConnectors();
+        RenderTable();
         statusLabel.Text =
-            $"ARMED {_armedKey} | {definition.ExpectedFunction} | Expected records: {FormatExpectedRecords(definition)} | " +
-            "Waiting for live transition...";
+            "RCM profile created in memory from the source CCF and physical pin map. Save it to begin progressive persistence.";
     }
 
-    private void StopObservationButton_Click(object? sender, EventArgs e)
+    private async void OpenRcmProfileButton_Click(object? sender, EventArgs e)
     {
-        string? stoppedKey = _armedKey;
-        OtmrBenchObservationSession? stoppedSession = _activeSession;
-        if (stoppedSession is not null)
+        if (_document is null)
         {
-            stoppedSession.Stop(DateTimeOffset.Now);
-            _completedSessions.Add(stoppedSession);
-            _lastCompletedSession = stoppedSession;
-        }
-
-        _activeSession = null;
-        _armedKey = null;
-        armSelectedButton.Enabled = true;
-        stopObservationButton.Enabled = false;
-        saveObservationButton.Enabled = _completedSessions.Count > 0;
-        RenderConnector(stoppedKey);
-        decoderStatusLabel.Text = "Live framing active; event decoder not proven";
-        statusLabel.Text = stoppedSession is null
-            ? "Pin observation stopped."
-            : $"Observation stopped: {stoppedSession.Connector}-{stoppedSession.Pin}, " +
-              $"{stoppedSession.FrameCount} complete raw frame(s) retained. Use Save Observation Session...";
-    }
-
-    private async void SaveObservationButton_Click(object? sender, EventArgs e)
-    {
-        OtmrBenchObservationSession? session = _lastCompletedSession;
-        if (session is null)
-        {
-            MessageBox.Show(
-                this,
-                "Stop an armed observation session before saving it.",
-                "OTMR I/O Bench",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            MessageBox.Show(this, "Load the source CCF before opening its RCM profile.", "Open RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        using var dialog = new SaveFileDialog
+        using var dialog = new OpenFileDialog
         {
-            Filter = "OTMR observation session JSON Lines (*.jsonl)|*.jsonl",
-            DefaultExt = "jsonl",
-            AddExtension = true,
-            FileName = $"OTMR_OBSERVATION_{session.ArmTimestamp:yyyyMMdd_HHmmss}_{session.Connector}-{session.Pin}.jsonl",
-            Title = "Save controlled OTMR raw observation session"
+            Filter = "OTMR RCM profiles (*.json)|*.json|JSON files (*.json)|*.json",
+            Title = "Open OTMR RCM profile",
+            CheckFileExists = true,
+            Multiselect = false
         };
-
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
 
         try
         {
-            await OtmrBenchObservationSessionWriter.WriteJsonLinesAsync(dialog.FileName, session);
-            _completedSessions.Remove(session);
-            _lastCompletedSession = _completedSessions.LastOrDefault();
-            saveObservationButton.Enabled = _lastCompletedSession is not null && _activeSession is null;
-            statusLabel.Text =
-                $"Saved raw-only observation session {session.Connector}-{session.Pin}: " +
-                $"{session.FrameCount} complete frame(s). No protocol meaning was inferred. " +
-                $"Pending unsaved sessions: {_completedSessions.Count}.";
+            RcmProfile loaded = await RcmProfileJson.LoadAsync(dialog.FileName);
+            RcmProfileJson.EnsureMatchesSource(loaded, _document.OriginalSha256, _document.Length);
+            _rcmProfile = loaded;
+            _rcmProfilePath = Path.GetFullPath(dialog.FileName);
+            PopulateConnectors();
+            RenderTable();
+            statusLabel.Text = $"RCM profile reopened: {Path.GetFileName(_rcmProfilePath)}. Progress restored.";
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
-                this,
-                ex.Message,
-                "Unable to save observation session",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            MessageBox.Show(this, ex.Message, "Unable to open RCM profile", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
-    private void ClearObservationsButton_Click(object? sender, EventArgs e)
+    private async void SaveRcmProfileButton_Click(object? sender, EventArgs e)
     {
-        _observations.Clear();
-        _rawObservations.Clear();
-        _completedSessions.Clear();
-        _activeSession = null;
-        _lastCompletedSession = null;
-        _armedKey = null;
-        _totalRawFrameCount = 0;
-        armSelectedButton.Enabled = true;
-        stopObservationButton.Enabled = false;
-        saveObservationButton.Enabled = false;
-        RenderConnector();
-        decoderStatusLabel.Text = "Live framing ready; event decoder not proven";
-        statusLabel.Text = "Bench observations cleared.";
+        if (_rcmProfile is null)
+            return;
+
+        if (_rcmProfilePath is null)
+        {
+            using var dialog = new SaveFileDialog
+            {
+                Filter = "OTMR RCM profiles (*.json)|*.json",
+                DefaultExt = "json",
+                AddExtension = true,
+                FileName = $"{Path.GetFileNameWithoutExtension(_rcmProfile.SourceCcfFilename)}_RCM.json",
+                Title = "Save OTMR RCM profile"
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+            _rcmProfilePath = Path.GetFullPath(dialog.FileName);
+        }
+
+        await SaveProfileToKnownPathAsync(showConfirmation: true);
     }
 
-    private void BenchGrid_SelectionChanged(object? sender, EventArgs e) => UpdateDetails();
-
-    private void RenderConnector(string? preferredSelectionKey = null)
+    private async Task SaveProfileToKnownPathAsync(bool showConfirmation)
     {
-        string connector = connectorComboBox.SelectedItem as string ?? string.Empty;
-        preferredSelectionKey ??= benchGrid.CurrentRow?.Tag is OtmrBenchPinDefinition selected
-            ? Key(selected)
-            : null;
-        DataGridViewRow? rowToSelect = null;
-        benchGrid.SuspendLayout();
+        if (_rcmProfile is null || _rcmProfilePath is null)
+            return;
+
         try
         {
-            benchGrid.Rows.Clear();
-            foreach (OtmrBenchPinDefinition definition in _definitions.Where(definition =>
-                         string.Equals(definition.Connector, connector, StringComparison.OrdinalIgnoreCase)))
+            await RcmProfileJson.SaveAsync(_rcmProfilePath, _rcmProfile, DateTimeOffset.Now);
+            if (showConfirmation)
+                statusLabel.Text = $"RCM progress saved: {_rcmProfilePath}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Unable to save RCM profile", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ConnectorComboBox_SelectedIndexChanged(object? sender, EventArgs e) => RenderTable();
+
+    private void RcmGrid_SelectionChanged(object? sender, EventArgs e) => UpdateWorkflow();
+
+    private void CaptureVoltageRemovedButton_Click(object? sender, EventArgs e) =>
+        BeginCapture(RcmElectricalTestState.VoltageRemoved);
+
+    private void CaptureVoltageAppliedButton_Click(object? sender, EventArgs e) =>
+        BeginCapture(RcmElectricalTestState.VoltageApplied24V);
+
+    private void BeginCapture(RcmElectricalTestState state)
+    {
+        RcmPinProfile? pin = SelectedProfilePin();
+        if (pin is null)
+            return;
+
+        try
+        {
+            _captureCoordinator.Begin(pin, state, DateTimeOffset.Now);
+            captureWindowTimer.Interval = Math.Max(100, decimal.ToInt32(captureSecondsNumeric.Value * 1000M));
+            captureWindowTimer.Start();
+            RenderTable(pin.Key);
+            UpdateCommandAvailability();
+            statusLabel.Text = state == RcmElectricalTestState.VoltageRemoved
+                ? $"CAPTURING {pin.Key}: operator condition = TEST VOLTAGE REMOVED."
+                : $"CAPTURING {pin.Key}: operator condition = +24 V APPLIED.";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Unable to start capture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void CaptureWindowTimer_Tick(object? sender, EventArgs e)
+    {
+        captureWindowTimer.Stop();
+        string? key = _captureCoordinator.ActivePinKey;
+        try
+        {
+            RcmStateEvidence evidence = _captureCoordinator.Stop(DateTimeOffset.Now);
+            if (_rcmProfile is not null)
+                _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
+            RenderTable(key);
+            UpdateCommandAvailability();
+            statusLabel.Text =
+                $"CAPTURED {key}: {evidence.FrameCount} complete raw frame(s). " +
+                "CANDIDATE RAW EVIDENCE only; decoder NOT VERIFIED.";
+            await SaveProfileToKnownPathAsync(showConfirmation: false);
+        }
+        catch (Exception ex)
+        {
+            statusLabel.Text = ex.Message;
+            UpdateCommandAvailability();
+        }
+    }
+
+    private async void CompareStatesButton_Click(object? sender, EventArgs e)
+    {
+        RcmPinProfile? pin = SelectedProfilePin();
+        if (pin is null)
+            return;
+
+        try
+        {
+            _captureCoordinator.Compare(pin, DateTimeOffset.Now);
+            if (_rcmProfile is not null)
+                _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
+            RenderTable(pin.Key);
+            statusLabel.Text =
+                $"Compared {pin.Key}: {pin.Comparison.RepeatableDifferences.Count} repeatable candidate raw difference(s). " +
+                "Decoder NOT VERIFIED.";
+            await SaveProfileToKnownPathAsync(showConfirmation: false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot compare states", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+
+    private async void ResetInputButton_Click(object? sender, EventArgs e)
+    {
+        RcmPinProfile? pin = SelectedProfilePin();
+        if (pin is null)
+            return;
+
+        try
+        {
+            _captureCoordinator.Reset(pin);
+            if (_rcmProfile is not null)
+                _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
+            RenderTable(pin.Key);
+            statusLabel.Text = $"Reset test evidence for {pin.Key} only.";
+            await SaveProfileToKnownPathAsync(showConfirmation: false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot reset input", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+
+    private void PopulateConnectors()
+    {
+        string? previous = connectorComboBox.SelectedItem as string;
+        IEnumerable<string> values = _rcmProfile is null
+            ? _definitions.Select(definition => definition.Connector)
+            : _rcmProfile.Pins.Select(pin => pin.Connector);
+        string[] connectors = values.Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        connectorComboBox.BeginUpdate();
+        try
+        {
+            connectorComboBox.Items.Clear();
+            connectorComboBox.Items.AddRange(connectors);
+            if (previous is not null && connectors.Contains(previous, StringComparer.OrdinalIgnoreCase))
+                connectorComboBox.SelectedItem = connectors.First(value => string.Equals(value, previous, StringComparison.OrdinalIgnoreCase));
+            else if (connectors.Length > 0)
+                connectorComboBox.SelectedIndex = 0;
+        }
+        finally
+        {
+            connectorComboBox.EndUpdate();
+        }
+    }
+
+    private void RenderTable(string? preferredKey = null)
+    {
+        if (rcmGrid is null)
+            return;
+
+        preferredKey ??= rcmGrid.CurrentRow?.Tag as string;
+        string connector = connectorComboBox.SelectedItem as string ?? string.Empty;
+        rcmGrid.SuspendLayout();
+        DataGridViewRow? selectedRow = null;
+        try
+        {
+            rcmGrid.Rows.Clear();
+            if (_rcmProfile is not null)
             {
-                AddDefinitionRow(definition);
-                DataGridViewRow addedRow = benchGrid.Rows[^1];
-                if (string.Equals(Key(definition), preferredSelectionKey, StringComparison.OrdinalIgnoreCase))
-                    rowToSelect = addedRow;
+                foreach (RcmPinProfile pin in _rcmProfile.Pins.Where(pin =>
+                             string.Equals(pin.Connector, connector, StringComparison.OrdinalIgnoreCase)))
+                {
+                    int index = rcmGrid.Rows.Add(
+                        pin.Pin,
+                        pin.Function,
+                        FormatCcfReference(pin.CcfReference),
+                        FormatCaptureState(pin, RcmElectricalTestState.VoltageRemoved),
+                        FormatCaptureState(pin, RcmElectricalTestState.VoltageApplied24V),
+                        FormatDifference(pin),
+                        "NOT VERIFIED",
+                        pin.Testable ? pin.RcmResult : "NOT TESTABLE");
+                    DataGridViewRow row = rcmGrid.Rows[index];
+                    row.Tag = pin.Key;
+                    ApplyRowStyle(row, pin.Testable, pin.RcmResult);
+                    if (string.Equals(pin.Key, preferredKey, StringComparison.Ordinal))
+                        selectedRow = row;
+                }
+            }
+            else
+            {
+                foreach (OtmrBenchPinDefinition definition in _definitions.Where(definition =>
+                             string.Equals(definition.Connector, connector, StringComparison.OrdinalIgnoreCase)))
+                {
+                    string key = $"{definition.Connector}-{definition.Pin}";
+                    int index = rcmGrid.Rows.Add(
+                        definition.Pin,
+                        definition.ExpectedFunction,
+                        FormatDefinitionCcf(definition),
+                        definition.IsVoltageTestPoint ? "PROFILE REQUIRED" : "NOT TESTABLE",
+                        definition.IsVoltageTestPoint ? "PROFILE REQUIRED" : "NOT TESTABLE",
+                        "—",
+                        "NOT VERIFIED",
+                        definition.IsVoltageTestPoint ? RcmResultStates.NotTested : "NOT TESTABLE");
+                    DataGridViewRow row = rcmGrid.Rows[index];
+                    row.Tag = key;
+                    ApplyRowStyle(row, definition.IsVoltageTestPoint, row.Cells[7].Value?.ToString() ?? string.Empty);
+                    if (string.Equals(key, preferredKey, StringComparison.Ordinal))
+                        selectedRow = row;
+                }
             }
         }
         finally
         {
-            benchGrid.ResumeLayout();
+            rcmGrid.ResumeLayout();
         }
 
-        if (string.Equals(connector, "J2", StringComparison.OrdinalIgnoreCase))
+        if (selectedRow is not null)
         {
-            coverageLabel.Text =
-                "J2 STATUS: mapping is deliberately incomplete. Only current bench candidate pins are shown until the full source pin map is imported. " +
-                "Do not infer missing J2 pins or card↔MIO ordering.";
+            rcmGrid.ClearSelection();
+            selectedRow.Selected = true;
+            rcmGrid.CurrentCell = selectedRow.Cells[0];
+        }
+
+        UpdateProgress();
+        UpdateWorkflow();
+    }
+
+    private void UpdateCaptureStatusOnly()
+    {
+        RcmPinProfile? pin = SelectedProfilePin();
+        if (pin is null)
+            return;
+
+        if (_captureCoordinator.ActiveState == RcmElectricalTestState.VoltageRemoved)
+            voltageRemovedStatusLabel.Text = $"CAPTURING | {pin.VoltageRemoved.FrameCount} complete frame(s)";
+        else if (_captureCoordinator.ActiveState == RcmElectricalTestState.VoltageApplied24V)
+            voltageAppliedStatusLabel.Text = $"CAPTURING | {pin.VoltageApplied24V.FrameCount} complete frame(s)";
+    }
+
+    private void UpdateWorkflow()
+    {
+        string? key = rcmGrid?.CurrentRow?.Tag as string;
+        OtmrBenchPinDefinition? definition = FindDefinition(key);
+        RcmPinProfile? pin = FindProfilePin(key);
+
+        if (definition is null && pin is null)
+        {
+            selectedPinLabel.Text = "Select a physical pin";
+            voltageRemovedInstructionLabel.Text = "REMOVE TEST VOLTAGE FROM SELECTED PIN";
+            voltageAppliedInstructionLabel.Text = "APPLY +24 V TO SELECTED PIN";
+            voltageRemovedStatusLabel.Text = "NOT CAPTURED";
+            voltageAppliedStatusLabel.Text = "NOT CAPTURED";
+            evidenceTextBox.Text = "Create or open an RCM profile, then select a physical input.";
+            UpdateCommandAvailability();
+            return;
+        }
+
+        string connector = pin?.Connector ?? definition!.Connector;
+        string physicalPin = pin?.Pin ?? definition!.Pin;
+        string function = pin?.Function ?? definition!.ExpectedFunction;
+        string pinKey = $"{connector}-{physicalPin}";
+        RcmCcfReference? ccf = pin?.CcfReference;
+        selectedPinLabel.Text =
+            $"{pinKey}\r\n{function}\r\n" +
+            $"Expected CCF records: {FormatRecordPair(ccf, definition)}\r\n" +
+            $"Card {ccf?.LogicalCard?.ToString() ?? definition?.ExpectedCard?.ToString() ?? "—"} / " +
+            $"Channel {ccf?.LogicalChannel?.ToString() ?? definition?.ExpectedChannel?.ToString() ?? "—"}";
+        voltageRemovedInstructionLabel.Text = $"REMOVE TEST VOLTAGE FROM {pinKey}";
+        voltageAppliedInstructionLabel.Text = $"APPLY +24 V TO {pinKey}";
+
+        if (pin is null)
+        {
+            voltageRemovedStatusLabel.Text = "PROFILE NOT CREATED";
+            voltageAppliedStatusLabel.Text = "PROFILE NOT CREATED";
+            evidenceTextBox.Text = "Create RCM Profile From Loaded CCF before capturing evidence.";
+        }
+        else if (!pin.Testable)
+        {
+            voltageRemovedStatusLabel.Text = "NOT TESTABLE";
+            voltageAppliedStatusLabel.Text = "NOT TESTABLE";
+            evidenceTextBox.Text =
+                $"NOT TESTABLE\r\n\r\nSafety classification:\r\n{pin.SafetyClassification}\r\n\r\n" +
+                "No voltage capture is offered for returns, supplies, RS485, link/termination, or unresolved unsafe points.";
         }
         else
         {
-            coverageLabel.Text =
-                "J1 STATUS: rows come from the external Class 171 bench pin map. Red/grey rows are return, supply, RS485, link or unresolved points — not 24 V digital test inputs.";
+            voltageRemovedStatusLabel.Text = FormatCaptureState(pin, RcmElectricalTestState.VoltageRemoved);
+            voltageAppliedStatusLabel.Text = FormatCaptureState(pin, RcmElectricalTestState.VoltageApplied24V);
+            evidenceTextBox.Text = BuildEvidenceSummary(pin);
         }
 
-        if (rowToSelect is not null)
-        {
-            benchGrid.ClearSelection();
-            rowToSelect.Selected = true;
-            benchGrid.CurrentCell = rowToSelect.Cells[0];
-        }
-
-        UpdateDetails();
+        UpdateCommandAvailability();
     }
 
-    private void AddDefinitionRow(OtmrBenchPinDefinition definition)
+    private void UpdateCommandAvailability()
     {
-        string key = Key(definition);
-        _observations.TryGetValue(key, out BenchObservation? observation);
-        _rawObservations.TryGetValue(key, out OtmrBenchObservationSession? rawObservation);
-        bool isArmed = string.Equals(_armedKey, key, StringComparison.OrdinalIgnoreCase);
-
-        int rowIndex = benchGrid.Rows.Add(
-            definition.Pin,
-            definition.Role,
-            definition.Mio,
-            definition.Channel,
-            definition.ExpectedFunction,
-            definition.SafetyInstruction,
-            FormatExpectedRecords(definition),
-            FormatExpectedCcf(definition),
-            BuildCurrentCcfSummary(definition),
-            EvaluateCcf(definition),
-            BuildObservedSummary(observation, rawObservation),
-            observation?.LastValue ?? (rawObservation?.FrameCount > 0 ? $"RAW #{rawObservation.FrameCount}" : string.Empty),
-            EvaluateObservation(definition, observation, rawObservation, isArmed));
-
-        DataGridViewRow row = benchGrid.Rows[rowIndex];
-        row.Tag = definition;
-        ApplyRowStyle(row, definition, observation, rawObservation, isArmed);
+        bool capturing = _captureCoordinator.IsCapturing;
+        RcmPinProfile? pin = SelectedProfilePin();
+        bool canCapture = _rcmProfile is not null && pin?.Testable == true && !capturing;
+        createRcmProfileButton.Enabled = _document is not null && _definitions.Count > 0 && !capturing;
+        openRcmProfileButton.Enabled = _document is not null && !capturing;
+        saveRcmProfileButton.Enabled = _rcmProfile is not null && !capturing;
+        loadPinMapButton.Enabled = !capturing;
+        refreshCcfButton.Enabled = !capturing;
+        connectorComboBox.Enabled = !capturing;
+        rcmGrid.Enabled = !capturing;
+        captureSecondsNumeric.Enabled = !capturing;
+        captureVoltageRemovedButton.Enabled = canCapture;
+        captureVoltageAppliedButton.Enabled = canCapture;
+        compareStatesButton.Enabled = canCapture && pin!.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested;
+        resetInputButton.Enabled = _rcmProfile is not null && pin is not null && !capturing;
     }
 
-    private static string FormatExpectedRecords(OtmrBenchPinDefinition definition)
+    private void UpdateProgress()
     {
-        if (definition.ExpectedRecordA is not int a)
-            return "—";
-        return definition.ExpectedRecordB is int b ? $"{a} ↔ {b}" : a.ToString();
+        progressLabel.Text = _rcmProfile is null
+            ? "RCM Progress: no profile created/opened"
+            : $"RCM Progress: {_rcmProfile.CompletedTestablePinCount} / {_rcmProfile.TestablePinCount} testable inputs complete";
+        profilePathLabel.Text = _rcmProfile is null
+            ? "RCM JSON: none"
+            : $"RCM JSON: {_rcmProfilePath ?? "not saved yet"} | Decoder: NOT VERIFIED";
     }
 
-    private static string FormatExpectedCcf(OtmrBenchPinDefinition definition)
-    {
-        if (definition.ExpectedCard is not int card || definition.ExpectedChannel is not int channel)
-            return "—";
-        return $"card {card} / ch {channel}";
-    }
+    private RcmPinProfile? SelectedProfilePin() => FindProfilePin(rcmGrid?.CurrentRow?.Tag as string);
 
-    private string BuildCurrentCcfSummary(OtmrBenchPinDefinition definition)
-    {
-        if (_document is null)
-            return "No CCF loaded";
-        if (definition.ExpectedRecordA is not int recordIndex)
-            return "No fixed record — discover from live data";
-        if ((uint)recordIndex >= (uint)_document.Records.Count)
-            return $"Record {recordIndex} outside CCF";
+    private RcmPinProfile? FindProfilePin(string? key) => key is null || _rcmProfile is null
+        ? null
+        : _rcmProfile.Pins.SingleOrDefault(pin => string.Equals(pin.Key, key, StringComparison.Ordinal));
 
-        CcfRecord record = _document.Records[recordIndex];
-        string pair = record.PairRecord.HasValue ? record.PairRecord.Value.ToString() : "—";
-        return $"rec {recordIndex}: {record.Name} | c{record.Card}/ch{record.Channel} | type {record.Type} | pair {pair}";
-    }
+    private OtmrBenchPinDefinition? FindDefinition(string? key) => key is null
+        ? null
+        : _definitions.SingleOrDefault(definition =>
+            string.Equals($"{definition.Connector}-{definition.Pin}", key, StringComparison.Ordinal));
 
-    private string EvaluateCcf(OtmrBenchPinDefinition definition)
+    private static string FormatCaptureState(RcmPinProfile pin, RcmElectricalTestState state)
     {
-        if (!definition.IsVoltageTestPoint)
+        if (!pin.Testable)
             return "NOT TESTABLE";
-        if (_document is null)
-            return "NO CCF";
-        if (definition.ExpectedRecordA is not int recordIndex)
-            return "UNMAPPED";
-        if ((uint)recordIndex >= (uint)_document.Records.Count)
-            return "BAD RECORD";
-
-        CcfRecord record = _document.Records[recordIndex];
-        bool matches = true;
-        if (definition.ExpectedCard is int card)
-            matches &= record.Card == card;
-        if (definition.ExpectedChannel is int channel)
-            matches &= record.Channel == channel;
-        if (definition.ExpectedRecordB is int pair)
-            matches &= record.Type == 2 && record.PairRecord.HasValue && record.PairRecord.Value == pair;
-
-        return matches ? "STRUCTURE MATCH" : "CCF CHECK";
+        RcmStateEvidence evidence = state == RcmElectricalTestState.VoltageRemoved
+            ? pin.VoltageRemoved
+            : pin.VoltageApplied24V;
+        return evidence.Tested ? $"CAPTURED | {evidence.FrameCount} frames" : "NOT CAPTURED";
     }
 
-    private string BuildObservedSummary(BenchObservation? observation, OtmrBenchObservationSession? rawObservation)
+    private string FormatDifference(RcmPinProfile pin)
     {
-        if (observation is null || observation.Records.Count == 0)
-            return rawObservation?.FrameCount > 0
-                ? $"No decoded record | raw frames: {rawObservation.FrameCount}"
-                : "—";
-
-        return string.Join(", ", observation.Records.OrderBy(value => value).Select(recordIndex =>
-        {
-            if (_document is not null && (uint)recordIndex < (uint)_document.Records.Count)
-            {
-                CcfRecord record = _document.Records[recordIndex];
-                return $"{recordIndex}:{record.Name} c{record.Card}/ch{record.Channel}";
-            }
-            return recordIndex.ToString();
-        }));
+        if (pin.Comparison.ComparedAt is null)
+            return pin.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested ? "READY TO COMPARE" : "—";
+        return pin.Comparison.RepeatableDifferences.Count > 0
+            ? $"{pin.Comparison.RepeatableDifferences.Count} candidate difference(s)"
+            : "NO REPEATABLE DIFFERENCE";
     }
 
-    private static string EvaluateObservation(
-        OtmrBenchPinDefinition definition,
-        BenchObservation? observation,
-        OtmrBenchObservationSession? rawObservation,
-        bool isArmed)
+    private static string FormatCcfReference(RcmCcfReference? reference)
     {
-        if (!definition.IsVoltageTestPoint)
-            return "NOT TESTABLE";
-        if (observation is null || observation.Records.Count == 0)
-        {
-            if (rawObservation?.FrameCount > 0)
-                return isArmed ? "ARMED - RAW OBSERVATION" : "RAW OBSERVATION STOPPED";
-            return isArmed ? "ARMED - WAITING" : "WAITING";
-        }
-        if (definition.ExpectedRecordA is not int expectedA)
-            return observation.Records.Count == 1 ? "DISCOVERED" : "DISCOVERED MULTIPLE";
-
-        var allowed = new HashSet<int> { expectedA };
-        if (definition.ExpectedRecordB is int expectedB)
-            allowed.Add(expectedB);
-
-        bool anyExpected = observation.Records.Any(allowed.Contains);
-        bool unexpected = observation.Records.Any(record => !allowed.Contains(record));
-
-        if (anyExpected && !unexpected)
-            return "LIVE MATCH";
-        if (unexpected)
-            return "MISMATCH / EXTRA";
-        return "NO EXPECTED EVENT";
+        if (reference is null)
+            return "No fixed CCF reference";
+        string records = reference.RecordA is int a
+            ? reference.RecordB is int b ? $"{a} ↔ {b}" : a.ToString()
+            : "—";
+        return $"records {records} | card {reference.LogicalCard?.ToString() ?? "—"} / ch {reference.LogicalChannel?.ToString() ?? "—"}";
     }
 
-    private void ApplyRowStyle(
-        DataGridViewRow row,
-        OtmrBenchPinDefinition definition,
-        BenchObservation? observation,
-        OtmrBenchObservationSession? rawObservation,
-        bool isArmed)
+    private static string FormatDefinitionCcf(OtmrBenchPinDefinition definition)
     {
-        string result = EvaluateObservation(definition, observation, rawObservation, isArmed);
+        string records = definition.ExpectedRecordA is int a
+            ? definition.ExpectedRecordB is int b ? $"{a} ↔ {b}" : a.ToString()
+            : "—";
+        return $"records {records} | card {definition.ExpectedCard?.ToString() ?? "—"} / ch {definition.ExpectedChannel?.ToString() ?? "—"}";
+    }
 
-        if (!definition.IsVoltageTestPoint)
+    private static string FormatRecordPair(RcmCcfReference? reference, OtmrBenchPinDefinition? definition)
+    {
+        int? a = reference?.RecordA ?? definition?.ExpectedRecordA;
+        int? b = reference?.RecordB ?? definition?.ExpectedRecordB;
+        return a is int recordA ? b is int recordB ? $"{recordA} ↔ {recordB}" : recordA.ToString() : "—";
+    }
+
+    private static string BuildEvidenceSummary(RcmPinProfile pin)
+    {
+        static string CaptureSummary(string label, RcmStateEvidence evidence) =>
+            $"{label}: {(evidence.Tested ? "CAPTURED" : "NOT CAPTURED")} | " +
+            $"frames {evidence.FrameCount} | stable raw features {evidence.CandidateStableFeatures.Count}\r\n" +
+            $"Candidate raw signature: {(string.IsNullOrEmpty(evidence.CandidateRawSignature) ? "—" : evidence.CandidateRawSignature)}";
+
+        string differences = pin.Comparison.RepeatableDifferences.Count == 0
+            ? "No comparison evidence yet."
+            : string.Join("\r\n", pin.Comparison.RepeatableDifferences.Take(20));
+        return
+            $"CANDIDATE RAW EVIDENCE\r\n\r\n" +
+            CaptureSummary("Voltage Removed", pin.VoltageRemoved) + "\r\n\r\n" +
+            CaptureSummary("+24V Applied", pin.VoltageApplied24V) + "\r\n\r\n" +
+            $"State Difference:\r\n{differences}\r\n\r\n" +
+            "Decoder: NOT VERIFIED\r\n" +
+            $"RCM Result: {pin.RcmResult}\r\n\r\n" +
+            "Electrical condition is operator-supplied. It is not interpreted as CCF ON/OFF, a record number, card/channel, PASS, or FAIL.";
+    }
+
+    private static void ApplyRowStyle(DataGridViewRow row, bool testable, string result)
+    {
+        if (!testable)
         {
             row.DefaultCellStyle.BackColor = Color.Gainsboro;
-            row.Cells[safetyColumn.Index].Style.BackColor = Color.MistyRose;
-            row.Cells[safetyColumn.Index].Style.ForeColor = Color.DarkRed;
+            row.DefaultCellStyle.ForeColor = Color.DimGray;
         }
-        else if (isArmed)
+        else if (result == RcmResultStates.RawDifferenceFound)
+        {
+            row.DefaultCellStyle.BackColor = Color.LightCyan;
+        }
+        else if (result == RcmResultStates.BothStatesCaptured)
         {
             row.DefaultCellStyle.BackColor = Color.LightGoldenrodYellow;
         }
-        else if (result == "LIVE MATCH")
-        {
-            row.DefaultCellStyle.BackColor = Color.Honeydew;
-        }
-        else if (result.StartsWith("MISMATCH", StringComparison.Ordinal))
-        {
-            row.DefaultCellStyle.BackColor = Color.MistyRose;
-        }
-        else if (result.StartsWith("DISCOVERED", StringComparison.Ordinal))
+        else if (result is RcmResultStates.VoltageRemovedCaptured or RcmResultStates.VoltageApplied24VCaptured)
         {
             row.DefaultCellStyle.BackColor = Color.AliceBlue;
         }
@@ -571,82 +611,10 @@ public partial class OtmrBenchControl : UserControl
         }
     }
 
-    private void UpdateDetails()
+    protected override void OnHandleDestroyed(EventArgs e)
     {
-        if (benchGrid.CurrentRow?.Tag is not OtmrBenchPinDefinition definition)
-        {
-            detailsTextBox.Text = "Select a pin row to see mapping and safety details.";
-            return;
-        }
-
-        string key = Key(definition);
-        _observations.TryGetValue(key, out BenchObservation? observation);
-        _rawObservations.TryGetValue(key, out OtmrBenchObservationSession? rawObservation);
-        bool isArmed = string.Equals(_armedKey, key, StringComparison.OrdinalIgnoreCase);
-        DateTimeOffset? latestTimestamp = LatestTimestamp(observation, rawObservation);
-        string lastActivity = latestTimestamp?.ToLocalTime().ToString("HH:mm:ss.fff") ?? "—";
-        string armedSummary = isArmed
-            ? $"ARMED {key}\r\n{definition.ExpectedFunction}\r\nExpected records: {FormatExpectedRecords(definition)}\r\nWaiting for live transition...\r\n\r\n"
-            : string.Empty;
-        string rawSummary = rawObservation?.FrameCount > 0
-            ? $"Raw frames since arming: {rawObservation.FrameCount}\r\n" +
-              $"Last raw frame: {rawObservation.LastRawHex}\r\n" +
-              $"{rawObservation.LastCandidateRawDelta}\r\n" +
-              $"Session armed: {rawObservation.ArmTimestamp:O}\r\n" +
-              $"Session stopped: {(rawObservation.StopTimestamp.HasValue ? rawObservation.StopTimestamp.Value.ToString("O") : "ACTIVE")}\r\n" +
-              "Decoder: no pin/record mapping proven by the capture\r\n"
-            : "Raw frames since arming: 0\r\nLast raw frame: —\r\nCANDIDATE RAW DELTA: —\r\n";
-
-        detailsTextBox.Text =
-            armedSummary +
-            $"PIN\r\n{definition.Connector}-{definition.Pin}\r\n\r\n" +
-            $"ROLE / FUNCTION\r\n{definition.Role} | MIO {definition.Mio} | channel {definition.Channel}\r\n{definition.ExpectedFunction}\r\n\r\n" +
-            $"RETURN / PAIR\r\n{definition.ReturnOrPair}\r\n\r\n" +
-            $"SAFETY\r\n{definition.SafetyInstruction}\r\n\r\n" +
-            $"REFERENCE MAPPING\r\nRecords: {FormatExpectedRecords(definition)} | {FormatExpectedCcf(definition)}\r\n{definition.EvidenceStatus}\r\n\r\n" +
-            $"CURRENT OPENED CCF\r\n{BuildCurrentCcfSummary(definition)}\r\nCheck: {EvaluateCcf(definition)}\r\n\r\n" +
-            $"LIVE OBSERVATION\r\n{BuildObservedSummary(observation, rawObservation)}\r\n" +
-            $"Last value: {observation?.LastValue ?? (rawObservation?.FrameCount > 0 ? $"RAW #{rawObservation.FrameCount}" : "—")}\r\n" +
-            $"Last activity: {lastActivity}\r\n" +
-            $"Result: {EvaluateObservation(definition, observation, rawObservation, isArmed)}\r\n" +
-            rawSummary + "\r\n" +
-            $"SOURCE / NOTES\r\n{definition.Source}\r\n\r\n" +
-            $"PROFILE FILE\r\n{_profilePath ?? "—"}";
+        _closing = true;
+        captureWindowTimer.Stop();
+        base.OnHandleDestroyed(e);
     }
-
-    private static DateTimeOffset? LatestTimestamp(
-        BenchObservation? observation,
-        OtmrBenchObservationSession? rawObservation)
-    {
-        if (observation is null)
-            return rawObservation?.LastTimestamp;
-        if (rawObservation?.LastTimestamp is not DateTimeOffset rawTimestamp)
-            return observation.LastTimestamp;
-        return observation.LastTimestamp >= rawTimestamp
-            ? observation.LastTimestamp
-            : rawTimestamp;
-    }
-
-    private static string Key(OtmrBenchPinDefinition definition) => $"{definition.Connector}-{definition.Pin}";
-
-    private sealed class BenchObservation
-    {
-        public HashSet<int> Records { get; } = new();
-        public DateTimeOffset LastTimestamp { get; private set; }
-        public string LastValue { get; private set; } = string.Empty;
-        public int? LastCard { get; private set; }
-        public int? LastChannel { get; private set; }
-        public string LastRawHex { get; private set; } = string.Empty;
-
-        public void Add(OtmrBenchLiveActivity activity)
-        {
-            Records.Add(activity.RecordIndex);
-            LastTimestamp = activity.Timestamp;
-            LastValue = activity.StateOrValue;
-            LastCard = activity.Card;
-            LastChannel = activity.Channel;
-            LastRawHex = activity.RawHex;
-        }
-    }
-
 }

@@ -8,34 +8,48 @@ partial class OtmrBenchControl
     private Label profileLabel = null!;
     private Label connectorLabel = null!;
     private ComboBox connectorComboBox = null!;
-    private Button loadProfileButton = null!;
+    private Button loadPinMapButton = null!;
     private Button refreshCcfButton = null!;
-    private Button armSelectedButton = null!;
-    private Button stopObservationButton = null!;
-    private Button saveObservationButton = null!;
-    private Button clearObservationsButton = null!;
-    private Label profileStatusLabel = null!;
+    private Button createRcmProfileButton = null!;
+    private Button openRcmProfileButton = null!;
+    private Button saveRcmProfileButton = null!;
+    private Label captureWindowLabel = null!;
+    private NumericUpDown captureSecondsNumeric = null!;
+    private Label captureSecondsLabel = null!;
+    private Label pinMapStatusLabel = null!;
     private Label ccfStatusLabel = null!;
-    private Label decoderStatusLabel = null!;
-    private Label coverageLabel = null!;
-    private SplitContainer benchSplit = null!;
-    private DataGridView benchGrid = null!;
+    private TableLayoutPanel progressPanel = null!;
+    private Label progressLabel = null!;
+    private Label profilePathLabel = null!;
+    private SplitContainer mainSplit = null!;
+    private DataGridView rcmGrid = null!;
     private DataGridViewTextBoxColumn pinColumn = null!;
-    private DataGridViewTextBoxColumn roleColumn = null!;
-    private DataGridViewTextBoxColumn mioColumn = null!;
-    private DataGridViewTextBoxColumn benchChannelColumn = null!;
-    private DataGridViewTextBoxColumn expectedFunctionColumn = null!;
-    private DataGridViewTextBoxColumn safetyColumn = null!;
-    private DataGridViewTextBoxColumn expectedRecordsColumn = null!;
+    private DataGridViewTextBoxColumn functionColumn = null!;
     private DataGridViewTextBoxColumn expectedCcfColumn = null!;
-    private DataGridViewTextBoxColumn currentCcfColumn = null!;
-    private DataGridViewTextBoxColumn ccfCheckColumn = null!;
-    private DataGridViewTextBoxColumn liveObservedColumn = null!;
-    private DataGridViewTextBoxColumn liveValueColumn = null!;
-    private DataGridViewTextBoxColumn resultColumn = null!;
-    private GroupBox detailsGroupBox = null!;
-    private TextBox detailsTextBox = null!;
+    private DataGridViewTextBoxColumn voltageRemovedColumn = null!;
+    private DataGridViewTextBoxColumn voltageAppliedColumn = null!;
+    private DataGridViewTextBoxColumn stateDifferenceColumn = null!;
+    private DataGridViewTextBoxColumn decoderColumn = null!;
+    private DataGridViewTextBoxColumn rcmResultColumn = null!;
+    private TableLayoutPanel workflowLayout = null!;
+    private Label selectedPinLabel = null!;
+    private GroupBox voltageRemovedGroup = null!;
+    private FlowLayoutPanel voltageRemovedPanel = null!;
+    private Label voltageRemovedInstructionLabel = null!;
+    private Button captureVoltageRemovedButton = null!;
+    private Label voltageRemovedStatusLabel = null!;
+    private GroupBox voltageAppliedGroup = null!;
+    private FlowLayoutPanel voltageAppliedPanel = null!;
+    private Label voltageAppliedInstructionLabel = null!;
+    private Button captureVoltageAppliedButton = null!;
+    private Label voltageAppliedStatusLabel = null!;
+    private FlowLayoutPanel actionPanel = null!;
+    private Button compareStatesButton = null!;
+    private Button resetInputButton = null!;
+    private GroupBox evidenceGroup = null!;
+    private TextBox evidenceTextBox = null!;
     private Label statusLabel = null!;
+    private System.Windows.Forms.Timer captureWindowTimer = null!;
 
     protected override void Dispose(bool disposing)
     {
@@ -52,273 +66,368 @@ partial class OtmrBenchControl
         profileLabel = new Label();
         connectorLabel = new Label();
         connectorComboBox = new ComboBox();
-        loadProfileButton = new Button();
+        loadPinMapButton = new Button();
         refreshCcfButton = new Button();
-        armSelectedButton = new Button();
-        stopObservationButton = new Button();
-        saveObservationButton = new Button();
-        clearObservationsButton = new Button();
-        profileStatusLabel = new Label();
+        createRcmProfileButton = new Button();
+        openRcmProfileButton = new Button();
+        saveRcmProfileButton = new Button();
+        captureWindowLabel = new Label();
+        captureSecondsNumeric = new NumericUpDown();
+        captureSecondsLabel = new Label();
+        pinMapStatusLabel = new Label();
         ccfStatusLabel = new Label();
-        decoderStatusLabel = new Label();
-        coverageLabel = new Label();
-        benchSplit = new SplitContainer();
-        benchGrid = new DataGridView();
+        progressPanel = new TableLayoutPanel();
+        progressLabel = new Label();
+        profilePathLabel = new Label();
+        mainSplit = new SplitContainer();
+        rcmGrid = new DataGridView();
         pinColumn = new DataGridViewTextBoxColumn();
-        roleColumn = new DataGridViewTextBoxColumn();
-        mioColumn = new DataGridViewTextBoxColumn();
-        benchChannelColumn = new DataGridViewTextBoxColumn();
-        expectedFunctionColumn = new DataGridViewTextBoxColumn();
-        safetyColumn = new DataGridViewTextBoxColumn();
-        expectedRecordsColumn = new DataGridViewTextBoxColumn();
+        functionColumn = new DataGridViewTextBoxColumn();
         expectedCcfColumn = new DataGridViewTextBoxColumn();
-        currentCcfColumn = new DataGridViewTextBoxColumn();
-        ccfCheckColumn = new DataGridViewTextBoxColumn();
-        liveObservedColumn = new DataGridViewTextBoxColumn();
-        liveValueColumn = new DataGridViewTextBoxColumn();
-        resultColumn = new DataGridViewTextBoxColumn();
-        detailsGroupBox = new GroupBox();
-        detailsTextBox = new TextBox();
+        voltageRemovedColumn = new DataGridViewTextBoxColumn();
+        voltageAppliedColumn = new DataGridViewTextBoxColumn();
+        stateDifferenceColumn = new DataGridViewTextBoxColumn();
+        decoderColumn = new DataGridViewTextBoxColumn();
+        rcmResultColumn = new DataGridViewTextBoxColumn();
+        workflowLayout = new TableLayoutPanel();
+        selectedPinLabel = new Label();
+        voltageRemovedGroup = new GroupBox();
+        voltageRemovedPanel = new FlowLayoutPanel();
+        voltageRemovedInstructionLabel = new Label();
+        captureVoltageRemovedButton = new Button();
+        voltageRemovedStatusLabel = new Label();
+        voltageAppliedGroup = new GroupBox();
+        voltageAppliedPanel = new FlowLayoutPanel();
+        voltageAppliedInstructionLabel = new Label();
+        captureVoltageAppliedButton = new Button();
+        voltageAppliedStatusLabel = new Label();
+        actionPanel = new FlowLayoutPanel();
+        compareStatesButton = new Button();
+        resetInputButton = new Button();
+        evidenceGroup = new GroupBox();
+        evidenceTextBox = new TextBox();
         statusLabel = new Label();
+        captureWindowTimer = new System.Windows.Forms.Timer(components);
         rootLayout.SuspendLayout();
         commandPanel.SuspendLayout();
-        ((System.ComponentModel.ISupportInitialize)benchSplit).BeginInit();
-        benchSplit.Panel1.SuspendLayout();
-        benchSplit.Panel2.SuspendLayout();
-        benchSplit.SuspendLayout();
-        ((System.ComponentModel.ISupportInitialize)benchGrid).BeginInit();
-        detailsGroupBox.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)captureSecondsNumeric).BeginInit();
+        progressPanel.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)mainSplit).BeginInit();
+        mainSplit.Panel1.SuspendLayout();
+        mainSplit.Panel2.SuspendLayout();
+        mainSplit.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)rcmGrid).BeginInit();
+        workflowLayout.SuspendLayout();
+        voltageRemovedGroup.SuspendLayout();
+        voltageRemovedPanel.SuspendLayout();
+        voltageAppliedGroup.SuspendLayout();
+        voltageAppliedPanel.SuspendLayout();
+        actionPanel.SuspendLayout();
+        evidenceGroup.SuspendLayout();
         SuspendLayout();
-        // 
+        //
         // rootLayout
-        // 
+        //
         rootLayout.ColumnCount = 1;
+        rootLayout.ColumnStyles.Clear();
         rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         rootLayout.Controls.Add(commandPanel, 0, 0);
-        rootLayout.Controls.Add(coverageLabel, 0, 1);
-        rootLayout.Controls.Add(benchSplit, 0, 2);
+        rootLayout.Controls.Add(progressPanel, 0, 1);
+        rootLayout.Controls.Add(mainSplit, 0, 2);
         rootLayout.Controls.Add(statusLabel, 0, 3);
         rootLayout.Dock = DockStyle.Fill;
-        rootLayout.Location = new Point(0, 0);
         rootLayout.Name = "rootLayout";
         rootLayout.Padding = new Padding(8);
         rootLayout.RowCount = 4;
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 78F));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
+        rootLayout.RowStyles.Clear();
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-        rootLayout.Size = new Size(1450, 760);
-        // 
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
+        //
         // commandPanel
-        // 
+        //
         commandPanel.Controls.Add(profileLabel);
         commandPanel.Controls.Add(connectorLabel);
         commandPanel.Controls.Add(connectorComboBox);
-        commandPanel.Controls.Add(loadProfileButton);
+        commandPanel.Controls.Add(loadPinMapButton);
         commandPanel.Controls.Add(refreshCcfButton);
-        commandPanel.Controls.Add(armSelectedButton);
-        commandPanel.Controls.Add(stopObservationButton);
-        commandPanel.Controls.Add(saveObservationButton);
-        commandPanel.Controls.Add(clearObservationsButton);
-        commandPanel.Controls.Add(profileStatusLabel);
+        commandPanel.Controls.Add(createRcmProfileButton);
+        commandPanel.Controls.Add(openRcmProfileButton);
+        commandPanel.Controls.Add(saveRcmProfileButton);
+        commandPanel.Controls.Add(captureWindowLabel);
+        commandPanel.Controls.Add(captureSecondsNumeric);
+        commandPanel.Controls.Add(captureSecondsLabel);
+        commandPanel.Controls.Add(pinMapStatusLabel);
         commandPanel.Controls.Add(ccfStatusLabel);
-        commandPanel.Controls.Add(decoderStatusLabel);
         commandPanel.Dock = DockStyle.Fill;
         commandPanel.Name = "commandPanel";
         commandPanel.Padding = new Padding(4);
         commandPanel.WrapContents = true;
-        // 
-        // profileLabel
-        // 
+        //
+        // top controls
+        //
         profileLabel.AutoSize = true;
         profileLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         profileLabel.Margin = new Padding(3, 9, 10, 3);
-        profileLabel.Text = "Profile: Class 171";
-        // 
-        // connectorLabel
-        // 
+        profileLabel.Text = "RCM: Class 171";
         connectorLabel.AutoSize = true;
         connectorLabel.Margin = new Padding(3, 9, 3, 3);
         connectorLabel.Text = "Connector:";
-        // 
-        // connectorComboBox
-        // 
         connectorComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
         connectorComboBox.Margin = new Padding(3, 4, 10, 3);
         connectorComboBox.Name = "connectorComboBox";
-        connectorComboBox.Size = new Size(80, 23);
+        connectorComboBox.Size = new Size(72, 23);
         connectorComboBox.SelectedIndexChanged += ConnectorComboBox_SelectedIndexChanged;
-        // 
-        // loadProfileButton
-        // 
-        loadProfileButton.AutoSize = true;
-        loadProfileButton.Margin = new Padding(3, 3, 6, 3);
-        loadProfileButton.Name = "loadProfileButton";
-        loadProfileButton.Text = "Load Pin Map...";
-        loadProfileButton.Click += LoadProfileButton_Click;
-        // 
-        // refreshCcfButton
-        // 
+        loadPinMapButton.AutoSize = true;
+        loadPinMapButton.Name = "loadPinMapButton";
+        loadPinMapButton.Text = "Load Pin Map...";
+        loadPinMapButton.Click += LoadPinMapButton_Click;
         refreshCcfButton.AutoSize = true;
-        refreshCcfButton.Margin = new Padding(3, 3, 12, 3);
         refreshCcfButton.Name = "refreshCcfButton";
         refreshCcfButton.Text = "Refresh CCF";
         refreshCcfButton.Click += RefreshCcfButton_Click;
-        // 
-        // armSelectedButton
-        // 
-        armSelectedButton.AutoSize = true;
-        armSelectedButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        armSelectedButton.Margin = new Padding(3, 3, 6, 3);
-        armSelectedButton.Name = "armSelectedButton";
-        armSelectedButton.Text = "Arm Selected Pin";
-        armSelectedButton.Click += ArmSelectedButton_Click;
-        // 
-        // stopObservationButton
-        // 
-        stopObservationButton.AutoSize = true;
-        stopObservationButton.Enabled = false;
-        stopObservationButton.Margin = new Padding(3, 3, 6, 3);
-        stopObservationButton.Name = "stopObservationButton";
-        stopObservationButton.Text = "Stop Observation";
-        stopObservationButton.Click += StopObservationButton_Click;
-        // 
-        // saveObservationButton
-        // 
-        saveObservationButton.AutoSize = true;
-        saveObservationButton.Enabled = false;
-        saveObservationButton.Margin = new Padding(3, 3, 6, 3);
-        saveObservationButton.Name = "saveObservationButton";
-        saveObservationButton.Text = "Save Observation Session...";
-        saveObservationButton.Click += SaveObservationButton_Click;
-        // 
-        // clearObservationsButton
-        // 
-        clearObservationsButton.AutoSize = true;
-        clearObservationsButton.Margin = new Padding(3, 3, 12, 3);
-        clearObservationsButton.Name = "clearObservationsButton";
-        clearObservationsButton.Text = "Clear Observations";
-        clearObservationsButton.Click += ClearObservationsButton_Click;
-        // 
-        // profileStatusLabel
-        // 
-        profileStatusLabel.AutoSize = true;
-        profileStatusLabel.Margin = new Padding(3, 9, 14, 3);
-        profileStatusLabel.Name = "profileStatusLabel";
-        profileStatusLabel.Text = "Pin map: not loaded";
-        // 
-        // ccfStatusLabel
-        // 
+        createRcmProfileButton.AutoSize = true;
+        createRcmProfileButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        createRcmProfileButton.Name = "createRcmProfileButton";
+        createRcmProfileButton.Text = "Create RCM Profile From Loaded CCF";
+        createRcmProfileButton.Click += CreateRcmProfileButton_Click;
+        openRcmProfileButton.AutoSize = true;
+        openRcmProfileButton.Name = "openRcmProfileButton";
+        openRcmProfileButton.Text = "Open RCM Profile";
+        openRcmProfileButton.Click += OpenRcmProfileButton_Click;
+        saveRcmProfileButton.AutoSize = true;
+        saveRcmProfileButton.Name = "saveRcmProfileButton";
+        saveRcmProfileButton.Text = "Save RCM Profile";
+        saveRcmProfileButton.Click += SaveRcmProfileButton_Click;
+        captureWindowLabel.AutoSize = true;
+        captureWindowLabel.Margin = new Padding(12, 9, 3, 3);
+        captureWindowLabel.Text = "Capture window:";
+        captureSecondsNumeric.DecimalPlaces = 1;
+        captureSecondsNumeric.Increment = 0.5M;
+        captureSecondsNumeric.Maximum = 10M;
+        captureSecondsNumeric.Minimum = 0.5M;
+        captureSecondsNumeric.Name = "captureSecondsNumeric";
+        captureSecondsNumeric.Size = new Size(58, 23);
+        captureSecondsNumeric.Value = 2M;
+        captureSecondsLabel.AutoSize = true;
+        captureSecondsLabel.Margin = new Padding(0, 9, 12, 3);
+        captureSecondsLabel.Text = "seconds";
+        pinMapStatusLabel.AutoSize = true;
+        pinMapStatusLabel.Margin = new Padding(3, 9, 18, 3);
+        pinMapStatusLabel.Name = "pinMapStatusLabel";
+        pinMapStatusLabel.Text = "Physical pin map: not loaded";
         ccfStatusLabel.AutoSize = true;
-        ccfStatusLabel.Margin = new Padding(3, 9, 14, 3);
+        ccfStatusLabel.Margin = new Padding(3, 9, 3, 3);
         ccfStatusLabel.Name = "ccfStatusLabel";
         ccfStatusLabel.Text = "CCF: none loaded";
-        // 
-        // decoderStatusLabel
-        // 
-        decoderStatusLabel.AutoSize = true;
-        decoderStatusLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        decoderStatusLabel.Margin = new Padding(3, 9, 3, 3);
-        decoderStatusLabel.Name = "decoderStatusLabel";
-        decoderStatusLabel.Text = "Live record detection: WAITING FOR VERIFIED DECODER";
-        // 
-        // coverageLabel
-        // 
-        coverageLabel.Dock = DockStyle.Fill;
-        coverageLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        coverageLabel.Name = "coverageLabel";
-        coverageLabel.Padding = new Padding(6);
-        coverageLabel.Text = "Mapping coverage";
-        coverageLabel.TextAlign = ContentAlignment.MiddleLeft;
-        // 
-        // benchSplit
-        // 
-        benchSplit.Dock = DockStyle.Fill;
-        benchSplit.Location = new Point(11, 141);
-        benchSplit.Name = "benchSplit";
-        benchSplit.Panel1.Controls.Add(benchGrid);
-        benchSplit.Panel2.Controls.Add(detailsGroupBox);
-        benchSplit.Size = new Size(1428, 584);
-        benchSplit.SplitterDistance = 1080;
-        // 
-        // benchGrid
-        // 
-        benchGrid.AllowUserToAddRows = false;
-        benchGrid.AllowUserToDeleteRows = false;
-        benchGrid.AllowUserToOrderColumns = true;
-        benchGrid.AutoGenerateColumns = false;
-        benchGrid.BackgroundColor = SystemColors.Window;
-        benchGrid.Columns.AddRange(new DataGridViewColumn[] { pinColumn, roleColumn, mioColumn, benchChannelColumn, expectedFunctionColumn, safetyColumn, expectedRecordsColumn, expectedCcfColumn, currentCcfColumn, ccfCheckColumn, liveObservedColumn, liveValueColumn, resultColumn });
-        benchGrid.Dock = DockStyle.Fill;
-        benchGrid.MultiSelect = false;
-        benchGrid.Name = "benchGrid";
-        benchGrid.ReadOnly = true;
-        benchGrid.RowHeadersVisible = false;
-        benchGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        benchGrid.SelectionChanged += BenchGrid_SelectionChanged;
-        // 
-        // grid columns
-        // 
-        pinColumn.HeaderText = "Pin"; pinColumn.Name = "pinColumn"; pinColumn.ReadOnly = true; pinColumn.Width = 45;
-        roleColumn.HeaderText = "Role"; roleColumn.Name = "roleColumn"; roleColumn.ReadOnly = true; roleColumn.Width = 125;
-        mioColumn.HeaderText = "MIO"; mioColumn.Name = "mioColumn"; mioColumn.ReadOnly = true; mioColumn.Width = 70;
-        benchChannelColumn.HeaderText = "Ch"; benchChannelColumn.Name = "benchChannelColumn"; benchChannelColumn.ReadOnly = true; benchChannelColumn.Width = 80;
-        expectedFunctionColumn.HeaderText = "Physical / expected function"; expectedFunctionColumn.Name = "expectedFunctionColumn"; expectedFunctionColumn.ReadOnly = true; expectedFunctionColumn.Width = 180;
-        safetyColumn.HeaderText = "Safety / bench instruction"; safetyColumn.Name = "safetyColumn"; safetyColumn.ReadOnly = true; safetyColumn.Width = 245;
-        expectedRecordsColumn.HeaderText = "Ref records"; expectedRecordsColumn.Name = "expectedRecordsColumn"; expectedRecordsColumn.ReadOnly = true; expectedRecordsColumn.Width = 85;
-        expectedCcfColumn.HeaderText = "Ref CCF"; expectedCcfColumn.Name = "expectedCcfColumn"; expectedCcfColumn.ReadOnly = true; expectedCcfColumn.Width = 100;
-        currentCcfColumn.HeaderText = "Current opened CCF"; currentCcfColumn.Name = "currentCcfColumn"; currentCcfColumn.ReadOnly = true; currentCcfColumn.Width = 270;
-        ccfCheckColumn.HeaderText = "CCF check"; ccfCheckColumn.Name = "ccfCheckColumn"; ccfCheckColumn.ReadOnly = true; ccfCheckColumn.Width = 105;
-        liveObservedColumn.HeaderText = "Live observed record(s)"; liveObservedColumn.Name = "liveObservedColumn"; liveObservedColumn.ReadOnly = true; liveObservedColumn.Width = 250;
-        liveValueColumn.HeaderText = "Live value"; liveValueColumn.Name = "liveValueColumn"; liveValueColumn.ReadOnly = true; liveValueColumn.Width = 90;
-        resultColumn.HeaderText = "Bench result"; resultColumn.Name = "resultColumn"; resultColumn.ReadOnly = true; resultColumn.Width = 120;
-        // 
-        // detailsGroupBox
-        // 
-        detailsGroupBox.Controls.Add(detailsTextBox);
-        detailsGroupBox.Dock = DockStyle.Fill;
-        detailsGroupBox.Name = "detailsGroupBox";
-        detailsGroupBox.Padding = new Padding(10);
-        detailsGroupBox.Text = "Selected pin / mapping evidence";
-        // 
-        // detailsTextBox
-        // 
-        detailsTextBox.BackColor = SystemColors.Window;
-        detailsTextBox.BorderStyle = BorderStyle.None;
-        detailsTextBox.Dock = DockStyle.Fill;
-        detailsTextBox.Font = new Font("Segoe UI", 9F);
-        detailsTextBox.Multiline = true;
-        detailsTextBox.Name = "detailsTextBox";
-        detailsTextBox.ReadOnly = true;
-        detailsTextBox.ScrollBars = ScrollBars.Vertical;
-        detailsTextBox.Text = "Select a pin row to see mapping and safety details.";
-        // 
-        // statusLabel
-        // 
+        //
+        // progressPanel
+        //
+        progressPanel.ColumnCount = 1;
+        progressPanel.ColumnStyles.Clear();
+        progressPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        progressPanel.Controls.Add(progressLabel, 0, 0);
+        progressPanel.Controls.Add(profilePathLabel, 0, 1);
+        progressPanel.Dock = DockStyle.Fill;
+        progressPanel.Name = "progressPanel";
+        progressPanel.RowCount = 2;
+        progressPanel.RowStyles.Clear();
+        progressPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        progressPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        progressLabel.AutoSize = true;
+        progressLabel.Dock = DockStyle.Fill;
+        progressLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        progressLabel.Name = "progressLabel";
+        progressLabel.Text = "RCM Progress: no profile created/opened";
+        profilePathLabel.AutoSize = true;
+        profilePathLabel.Dock = DockStyle.Fill;
+        profilePathLabel.Name = "profilePathLabel";
+        profilePathLabel.Text = "RCM JSON: none";
+        //
+        // mainSplit
+        //
+        mainSplit.Dock = DockStyle.Fill;
+        mainSplit.Name = "mainSplit";
+        mainSplit.Panel1.Controls.Add(rcmGrid);
+        mainSplit.Panel2.Controls.Add(workflowLayout);
+        mainSplit.SplitterDistance = 900;
+        //
+        // rcmGrid
+        //
+        rcmGrid.AllowUserToAddRows = false;
+        rcmGrid.AllowUserToDeleteRows = false;
+        rcmGrid.AllowUserToOrderColumns = true;
+        rcmGrid.AutoGenerateColumns = false;
+        rcmGrid.BackgroundColor = SystemColors.Window;
+        rcmGrid.Columns.AddRange(new DataGridViewColumn[] { pinColumn, functionColumn, expectedCcfColumn, voltageRemovedColumn, voltageAppliedColumn, stateDifferenceColumn, decoderColumn, rcmResultColumn });
+        rcmGrid.Dock = DockStyle.Fill;
+        rcmGrid.MultiSelect = false;
+        rcmGrid.Name = "rcmGrid";
+        rcmGrid.ReadOnly = true;
+        rcmGrid.RowHeadersVisible = false;
+        rcmGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        rcmGrid.CurrentCellChanged += RcmGrid_SelectionChanged;
+        pinColumn.HeaderText = "Pin"; pinColumn.Name = "pinColumn"; pinColumn.ReadOnly = true; pinColumn.Width = 55;
+        functionColumn.HeaderText = "Function"; functionColumn.Name = "functionColumn"; functionColumn.ReadOnly = true; functionColumn.Width = 150;
+        expectedCcfColumn.HeaderText = "Expected CCF"; expectedCcfColumn.Name = "expectedCcfColumn"; expectedCcfColumn.ReadOnly = true; expectedCcfColumn.Width = 180;
+        voltageRemovedColumn.HeaderText = "Voltage Removed"; voltageRemovedColumn.Name = "voltageRemovedColumn"; voltageRemovedColumn.ReadOnly = true; voltageRemovedColumn.Width = 135;
+        voltageAppliedColumn.HeaderText = "+24V Applied"; voltageAppliedColumn.Name = "voltageAppliedColumn"; voltageAppliedColumn.ReadOnly = true; voltageAppliedColumn.Width = 135;
+        stateDifferenceColumn.HeaderText = "State Difference"; stateDifferenceColumn.Name = "stateDifferenceColumn"; stateDifferenceColumn.ReadOnly = true; stateDifferenceColumn.Width = 170;
+        decoderColumn.HeaderText = "Decoder"; decoderColumn.Name = "decoderColumn"; decoderColumn.ReadOnly = true; decoderColumn.Width = 100;
+        rcmResultColumn.HeaderText = "RCM Result"; rcmResultColumn.Name = "rcmResultColumn"; rcmResultColumn.ReadOnly = true; rcmResultColumn.Width = 170;
+        //
+        // workflowLayout
+        //
+        workflowLayout.ColumnCount = 1;
+        workflowLayout.ColumnStyles.Clear();
+        workflowLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        workflowLayout.Controls.Add(selectedPinLabel, 0, 0);
+        workflowLayout.Controls.Add(voltageRemovedGroup, 0, 1);
+        workflowLayout.Controls.Add(voltageAppliedGroup, 0, 2);
+        workflowLayout.Controls.Add(actionPanel, 0, 3);
+        workflowLayout.Controls.Add(evidenceGroup, 0, 4);
+        workflowLayout.Dock = DockStyle.Fill;
+        workflowLayout.Name = "workflowLayout";
+        workflowLayout.Padding = new Padding(8, 0, 0, 0);
+        workflowLayout.RowCount = 5;
+        workflowLayout.RowStyles.Clear();
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96F));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96F));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        selectedPinLabel.Dock = DockStyle.Fill;
+        selectedPinLabel.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        selectedPinLabel.Name = "selectedPinLabel";
+        selectedPinLabel.Padding = new Padding(6);
+        selectedPinLabel.Text = "Select a physical pin";
+        //
+        // voltage removed workflow
+        //
+        voltageRemovedGroup.Controls.Add(voltageRemovedPanel);
+        voltageRemovedGroup.Dock = DockStyle.Fill;
+        voltageRemovedGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        voltageRemovedGroup.Name = "voltageRemovedGroup";
+        voltageRemovedGroup.Text = "STEP 1 — TEST VOLTAGE REMOVED";
+        voltageRemovedPanel.Controls.Add(voltageRemovedInstructionLabel);
+        voltageRemovedPanel.Controls.Add(captureVoltageRemovedButton);
+        voltageRemovedPanel.Controls.Add(voltageRemovedStatusLabel);
+        voltageRemovedPanel.Dock = DockStyle.Fill;
+        voltageRemovedPanel.FlowDirection = FlowDirection.TopDown;
+        voltageRemovedPanel.Name = "voltageRemovedPanel";
+        voltageRemovedPanel.Padding = new Padding(6);
+        voltageRemovedPanel.WrapContents = false;
+        voltageRemovedInstructionLabel.AutoSize = true;
+        voltageRemovedInstructionLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        voltageRemovedInstructionLabel.Name = "voltageRemovedInstructionLabel";
+        voltageRemovedInstructionLabel.Text = "REMOVE TEST VOLTAGE FROM SELECTED PIN";
+        captureVoltageRemovedButton.AutoSize = true;
+        captureVoltageRemovedButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        captureVoltageRemovedButton.Name = "captureVoltageRemovedButton";
+        captureVoltageRemovedButton.Text = "Capture Voltage Removed";
+        captureVoltageRemovedButton.Click += CaptureVoltageRemovedButton_Click;
+        voltageRemovedStatusLabel.AutoSize = true;
+        voltageRemovedStatusLabel.Name = "voltageRemovedStatusLabel";
+        voltageRemovedStatusLabel.Text = "NOT CAPTURED";
+        //
+        // voltage applied workflow
+        //
+        voltageAppliedGroup.Controls.Add(voltageAppliedPanel);
+        voltageAppliedGroup.Dock = DockStyle.Fill;
+        voltageAppliedGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        voltageAppliedGroup.Name = "voltageAppliedGroup";
+        voltageAppliedGroup.Text = "STEP 2 — +24 V APPLIED";
+        voltageAppliedPanel.Controls.Add(voltageAppliedInstructionLabel);
+        voltageAppliedPanel.Controls.Add(captureVoltageAppliedButton);
+        voltageAppliedPanel.Controls.Add(voltageAppliedStatusLabel);
+        voltageAppliedPanel.Dock = DockStyle.Fill;
+        voltageAppliedPanel.FlowDirection = FlowDirection.TopDown;
+        voltageAppliedPanel.Name = "voltageAppliedPanel";
+        voltageAppliedPanel.Padding = new Padding(6);
+        voltageAppliedPanel.WrapContents = false;
+        voltageAppliedInstructionLabel.AutoSize = true;
+        voltageAppliedInstructionLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        voltageAppliedInstructionLabel.Name = "voltageAppliedInstructionLabel";
+        voltageAppliedInstructionLabel.Text = "APPLY +24 V TO SELECTED PIN";
+        captureVoltageAppliedButton.AutoSize = true;
+        captureVoltageAppliedButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        captureVoltageAppliedButton.Name = "captureVoltageAppliedButton";
+        captureVoltageAppliedButton.Text = "Capture +24V Applied";
+        captureVoltageAppliedButton.Click += CaptureVoltageAppliedButton_Click;
+        voltageAppliedStatusLabel.AutoSize = true;
+        voltageAppliedStatusLabel.Name = "voltageAppliedStatusLabel";
+        voltageAppliedStatusLabel.Text = "NOT CAPTURED";
+        //
+        // actionPanel
+        //
+        actionPanel.Controls.Add(compareStatesButton);
+        actionPanel.Controls.Add(resetInputButton);
+        actionPanel.Dock = DockStyle.Fill;
+        actionPanel.Name = "actionPanel";
+        compareStatesButton.AutoSize = true;
+        compareStatesButton.Name = "compareStatesButton";
+        compareStatesButton.Text = "Compare States";
+        compareStatesButton.Click += CompareStatesButton_Click;
+        resetInputButton.AutoSize = true;
+        resetInputButton.Name = "resetInputButton";
+        resetInputButton.Text = "Reset This Input";
+        resetInputButton.Click += ResetInputButton_Click;
+        //
+        // evidenceGroup
+        //
+        evidenceGroup.Controls.Add(evidenceTextBox);
+        evidenceGroup.Dock = DockStyle.Fill;
+        evidenceGroup.Name = "evidenceGroup";
+        evidenceGroup.Text = "State comparison / CANDIDATE RAW EVIDENCE";
+        evidenceTextBox.BackColor = SystemColors.Window;
+        evidenceTextBox.BorderStyle = BorderStyle.None;
+        evidenceTextBox.Dock = DockStyle.Fill;
+        evidenceTextBox.Multiline = true;
+        evidenceTextBox.Name = "evidenceTextBox";
+        evidenceTextBox.ReadOnly = true;
+        evidenceTextBox.ScrollBars = ScrollBars.Both;
+        evidenceTextBox.Text = "Create or open an RCM profile, then select a physical input.";
+        evidenceTextBox.WordWrap = false;
+        //
+        // status and timer
+        //
         statusLabel.Dock = DockStyle.Fill;
         statusLabel.Name = "statusLabel";
         statusLabel.Padding = new Padding(6, 0, 0, 0);
-        statusLabel.Text = "Observation-only bench tool. It does not apply voltage and does not transmit OTMR commands.";
+        statusLabel.Text = "RCM evidence capture only. No protocol semantics, PASS, or FAIL are inferred.";
         statusLabel.TextAlign = ContentAlignment.MiddleLeft;
-        // 
+        captureWindowTimer.Tick += CaptureWindowTimer_Tick;
+        //
         // OtmrBenchControl
-        // 
+        //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         Controls.Add(rootLayout);
         Name = "OtmrBenchControl";
         Size = new Size(1450, 760);
-        commandPanel.ResumeLayout(true);
+        rootLayout.ResumeLayout(false);
+        commandPanel.ResumeLayout(false);
         commandPanel.PerformLayout();
-        benchSplit.Panel1.ResumeLayout(false);
-        benchSplit.Panel2.ResumeLayout(false);
-        ((System.ComponentModel.ISupportInitialize)benchSplit).EndInit();
-        benchSplit.ResumeLayout(true);
-        ((System.ComponentModel.ISupportInitialize)benchGrid).EndInit();
-        detailsGroupBox.ResumeLayout(true);
-        detailsGroupBox.PerformLayout();
-        rootLayout.ResumeLayout(true);
-        ResumeLayout(true);
-        PerformLayout();
+        ((System.ComponentModel.ISupportInitialize)captureSecondsNumeric).EndInit();
+        progressPanel.ResumeLayout(false);
+        progressPanel.PerformLayout();
+        mainSplit.Panel1.ResumeLayout(false);
+        mainSplit.Panel2.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)mainSplit).EndInit();
+        mainSplit.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)rcmGrid).EndInit();
+        workflowLayout.ResumeLayout(false);
+        voltageRemovedGroup.ResumeLayout(false);
+        voltageRemovedPanel.ResumeLayout(false);
+        voltageRemovedPanel.PerformLayout();
+        voltageAppliedGroup.ResumeLayout(false);
+        voltageAppliedPanel.ResumeLayout(false);
+        voltageAppliedPanel.PerformLayout();
+        actionPanel.ResumeLayout(false);
+        actionPanel.PerformLayout();
+        evidenceGroup.ResumeLayout(false);
+        evidenceGroup.PerformLayout();
+        ResumeLayout(false);
     }
 }
