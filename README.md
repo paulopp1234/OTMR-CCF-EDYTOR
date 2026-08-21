@@ -51,6 +51,10 @@ src/CcfEditor.Otmr/
     OtmrCaptureWriter.cs
   Live/
     OtmrLiveService.cs
+  Bench/
+    OtmrBenchPinDefinition.cs
+    OtmrBenchProfileReader.cs
+    OtmrBenchLiveActivity.cs
 ```
 
 WinForms integration:
@@ -60,9 +64,75 @@ src/CcfEditor.WinForms/
   OtmrLiveControl.cs
   OtmrLiveControl.Designer.cs
   OtmrLiveControl.resx
+  OtmrBenchControl.cs
+  OtmrBenchControl.Designer.cs
+  OtmrBenchControl.resx
+  MainForm.BenchIntegration.cs
+  Profiles/Class171/Class171_Bench_PinMap.tsv
 ```
 
-The OTMR UI is a normal Visual Studio Designer `UserControl`; it is not built dynamically at runtime.
+The OTMR controls are normal Visual Studio Designer `UserControl`s; they are not built dynamically at runtime.
+
+## `test` branch — OTMR I/O Bench
+
+The top-level **OTMR I/O Bench** tab is an observation/comparison tool for physical Class 171 OTMR connector testing.
+
+Its purpose is to keep four different kinds of information visibly separate:
+
+1. **Physical pin reference** — external J1/J2 bench/wiring information.
+2. **Reference CCF expectation** — expected record/card/channel where source evidence exists.
+3. **Current opened CCF** — record name/type/card/channel/pair read from the actual CCF opened in the editor.
+4. **Live OTMR observation** — actual decoded record/state once a verified read/live decoder is available.
+
+The table contains:
+
+- connector pin
+- role
+- MIO/channel reference
+- physical/expected function
+- safety/bench instruction
+- reference record pair
+- reference card/channel
+- current opened-CCF interpretation
+- CCF structure check
+- live observed record(s)
+- live value/state
+- bench result
+
+The user can select one row and press **Arm Selected Pin** before physically stimulating that input. Once a verified OTMR live decoder is connected, every decoded record change occurring during that armed test can be recorded against the selected physical pin. Multiple observed records are deliberately retained rather than silently choosing one.
+
+Bench result states include:
+
+- `WAITING`
+- `LIVE MATCH`
+- `MISMATCH / EXTRA`
+- `DISCOVERED`
+- `DISCOVERED MULTIPLE`
+- `NOT TESTABLE`
+
+### Bench safety classification
+
+The tab does not apply voltage and does not transmit OTMR commands. It is an observation tool only.
+
+Rows classified as returns, supplies, RS485, termination links or unresolved/special interfaces are visibly marked as not voltage-testable and cannot be armed by the UI. A connector being populated does **not** mean that applying 24 V to that contact is safe.
+
+### J1 coverage
+
+The bundled Class 171 external profile currently contains the source-backed J1 bench rows, including the proven MIO1 digital bank, AWS/TPWS/MIO5 reference rows, returns, supply/reference contacts, RS485 contacts and unresolved/special contacts. The source/reference profile remains separate from CCF parsing.
+
+### J2 coverage
+
+J2 is intentionally **not treated as solved**. The bundled profile currently contains only the present bench-discovery candidates:
+
+- `J2-A` — Headlight Left
+- `J2-Q` — Fire Alarm Isolation
+- `J2-f` — Wheelslide
+
+Current logical channel-0 candidates remain record/card possibilities rather than proven physical-card assignments. Missing J2 contacts are not invented. The tab supports **Load Pin Map...** so a complete source-backed J2 TSV can replace/extend the bundled reference when available.
+
+### Current live limitation
+
+Milestone 1 captures raw serial bytes but does not yet contain a verified Arrowvale/Grinsty live-record decoder. Therefore the I/O Bench UI and its `OtmrBenchLiveActivity` input contract are ready, but automatic population of **Live observed record(s)** will remain inactive until genuine Analyser captures are used to implement and verify the safe startup/live protocol.
 
 ## Revision history
 
@@ -73,18 +143,16 @@ This is a Visual Studio WinForms Designer project.
 
 ## Data provenance
 
-The visible CCF data comes only from the `.ccf` file explicitly opened by the user.
+The CCF editor itself remains CCF-only:
 
 - Records: parsed from the opened CCF bytes.
 - Header: raw and decoded values calculated from the opened CCF bytes.
 - Hex: exact working CCF bytes.
 - Validation: calculated from the opened/working CCF.
 
-No J1 spreadsheet, TSV, Class 171 mapping table, demo data, sample records, or fallback configuration is bundled or auto-loaded by the application.
+The **OTMR I/O Bench** tab is different by design: it can load an explicitly separate external physical pin-reference profile. The bundled `Class171_Bench_PinMap.tsv` is labelled and treated as external reference/schema information. It is never merged into the CCF parser and never replaces values read from the opened CCF.
 
-The header `Meaning` labels and the Records field-description pane are schema/help metadata. Actual displayed current values are read from the CCF that the user opened.
-
-External mapping/import functionality can be added later only as an explicit user action and must remain clearly separate from CCF-derived data.
+The header `Meaning` labels and the Records field-description pane are schema/help metadata. Actual Records/Header/Hex values are read from the CCF that the user opened.
 
 ## Editing
 
@@ -127,12 +195,13 @@ For digital-only fields such as Pair, OFF text and ON text, the pane explicitly 
 
 `MainForm.cs` contains application logic.
 `MainForm.Designer.cs` contains the form controls/layout.
-`MainForm.FieldHelp.cs` contains the field-help behaviour only.
+`MainForm.FieldHelp.cs` contains Records field-help behaviour.
+`MainForm.BenchIntegration.cs` exposes the current opened CCF to the bench UserControl without changing the editor logic.
 `MainForm.resx` is linked to the form.
 
-Right-click `MainForm.cs` -> **View Designer**.
+`OtmrLiveControl` and `OtmrBenchControl` each have conventional `.cs`, `.Designer.cs` and `.resx` files. The bench control suppresses runtime profile/host access while Visual Studio is using it in design mode.
 
-The editing UI and right-side help pane are Designer-managed controls; the program does not construct the GUI dynamically at runtime.
+Right-click `MainForm.cs` -> **View Designer**.
 
 ## Remote startup gate
 
