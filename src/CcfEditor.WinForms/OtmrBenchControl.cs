@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using CcfEditor.Core;
 using CcfEditor.Otmr.Bench;
 
@@ -14,14 +15,29 @@ public partial class OtmrBenchControl : UserControl
     public OtmrBenchControl()
     {
         InitializeComponent();
-        LoadBundledProfile();
+
+        if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
+        {
+            LoadBundledProfile();
+        }
+        else
+        {
+            profileStatusLabel.Text = "Pin map: design-time preview";
+            decoderStatusLabel.Text = "Live record detection: runtime only";
+        }
     }
 
     protected override void OnVisibleChanged(EventArgs e)
     {
         base.OnVisibleChanged(e);
-        if (Visible && !IsDisposed)
-            RefreshCcfFromHost();
+
+        if (LicenseManager.UsageMode == LicenseUsageMode.Designtime)
+            return;
+
+        if (!Visible || IsDisposed || ccfStatusLabel is null || benchGrid is null)
+            return;
+
+        RefreshCcfFromHost();
     }
 
     public void ReportLiveSignalActivity(OtmrBenchLiveActivity activity)
