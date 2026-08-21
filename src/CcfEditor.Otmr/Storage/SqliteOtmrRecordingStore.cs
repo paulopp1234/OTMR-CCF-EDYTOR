@@ -160,7 +160,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 
             Guid outboxId = Guid.NewGuid();
             await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await using SqliteTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            using SqliteTransaction transaction = connection.BeginTransaction();
 
             await using (SqliteCommand update = connection.CreateCommand())
             {
@@ -190,7 +190,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 await outbox.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            transaction.Commit();
 
             lock (_stateSync)
             {
@@ -335,7 +335,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         ThrowIfDisposed();
         await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
         await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using SqliteTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        using SqliteTransaction transaction = connection.BeginTransaction();
 
         string? sessionId = null;
         await using (SqliteCommand find = connection.CreateCommand())
@@ -372,7 +372,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
             updateSession.Parameters.AddWithValue("$sessionId", sessionId);
             await updateSession.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        transaction.Commit();
     }
 
     public async Task MarkUploadFailedAsync(
@@ -613,7 +613,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
     {
         await EnsureDatabaseAsync(CancellationToken.None).ConfigureAwait(false);
         await using SqliteConnection connection = await OpenConnectionAsync(CancellationToken.None).ConfigureAwait(false);
-        await using SqliteTransaction transaction = await connection.BeginTransactionAsync().ConfigureAwait(false);
+        using SqliteTransaction transaction = connection.BeginTransaction();
         foreach (DbWorkItem item in batch)
         {
             switch (item)
@@ -632,7 +632,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                     break;
             }
         }
-        await transaction.CommitAsync().ConfigureAwait(false);
+        transaction.Commit();
     }
 
     private static async Task WriteRawAsync(SqliteConnection connection, SqliteTransaction transaction, RawEntryWorkItem item)
