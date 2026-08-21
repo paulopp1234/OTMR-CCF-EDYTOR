@@ -1,3 +1,5 @@
+#nullable enable
+
 namespace CcfEditor.WinForms;
 
 partial class OtmrLiveControl

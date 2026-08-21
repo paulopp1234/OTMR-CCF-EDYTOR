@@ -25,6 +25,7 @@ public partial class MainForm : Form
         recordsGrid.DataSource = _recordsBinding;
         headerGrid.DataSource = _headerBinding;
         hexGrid.DataSource = _hexBinding;
+        otmrBenchControl.SetCurrentCcf(_document);
     }
 
     private void OpenMenuItem_Click(object? sender, EventArgs e)
@@ -363,6 +364,11 @@ public partial class MainForm : Form
 
         if (recordIndex.HasValue && recordIndex.Value >= 0 && recordIndex.Value < CcfConstants.RecordCount)
             SelectRecord(recordIndex.Value, scrollRecordsGrid: true);
+
+        // The bench owns no independent CCF lifecycle. Push the host's current
+        // document after every load/edit refresh so its status and profile
+        // creation source cannot lag behind MainForm.
+        otmrBenchControl.SetCurrentCcf(_document);
     }
 
     private void UpdateStatus(CcfDocument document)

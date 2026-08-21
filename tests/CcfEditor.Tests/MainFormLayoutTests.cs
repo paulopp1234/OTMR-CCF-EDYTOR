@@ -1,4 +1,5 @@
 using System.Reflection;
+using CcfEditor.Core;
 using CcfEditor.Otmr.Rcm;
 using CcfEditor.WinForms;
 
@@ -6,6 +7,117 @@ namespace CcfEditor.Tests;
 
 public sealed class MainFormLayoutTests
 {
+    [Fact]
+    public void VisibleBenchReceivesLoadedAndReplacementCcfWithoutManualRefresh()
+    {
+        RunInStaThread(() =>
+        {
+            string directory = Path.Combine(Path.GetTempPath(), $"CcfEditor.BenchSync.{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            string firstPath = Path.Combine(directory, "CLASS171_v26_J2_ABCDE.ccf");
+            string secondPath = Path.Combine(directory, "CLASS171_replacement.ccf");
+            File.Copy(FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf"), firstPath);
+            File.Copy(firstPath, secondPath);
+            try
+            {
+                using var form = new MainForm();
+                form.Show();
+                TabControl tabs = Find<TabControl>(form, "tabs");
+                tabs.SelectedIndex = 5;
+                Application.DoEvents();
+
+                Label benchStatus = Find<Label>(form, "ccfStatusLabel");
+                Button createProfile = Find<Button>(form, "createRcmProfileButton");
+                Assert.Equal("CCF NOT LOADED", benchStatus.Text);
+                Assert.False(createProfile.Enabled);
+
+                InvokeLoadCcf(form, firstPath);
+                Application.DoEvents();
+
+                ToolStripStatusLabel mainStatus = FindToolStripItem<ToolStripStatusLabel>(form, "fileStatusLabel");
+                Assert.Contains("CLASS171_v26_J2_ABCDE.ccf", mainStatus.Text, StringComparison.Ordinal);
+                Assert.Contains("26,600 bytes", mainStatus.Text, StringComparison.Ordinal);
+                Assert.Contains("CLASS171_v26_J2_ABCDE.ccf", benchStatus.Text, StringComparison.Ordinal);
+                Assert.DoesNotContain("CCF NOT LOADED", benchStatus.Text, StringComparison.Ordinal);
+                Assert.True(createProfile.Enabled);
+
+                createProfile.PerformClick();
+                Application.DoEvents();
+                DataGridView grid = Find<DataGridView>(form, "rcmGrid");
+                ComboBox filter = Find<ComboBox>(form, "connectorComboBox");
+                OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
+                RcmProfile profile = GetPrivateField<RcmProfile>(bench, "_rcmProfile");
+                Assert.Equal(RcmInputFilter.All, filter.SelectedItem);
+                Assert.Equal(profile.Pins.Count, grid.Rows.Count);
+                AssertImported(profile, 0, 12, 0, 0, "Throttle 1");
+                AssertImported(profile, 1, 13, 0, 1, "Throttle 2");
+                AssertImported(profile, 2, 14, 0, 2, "Throttle 3");
+
+                int importedCount = profile.Pins.Count;
+                RcmProfileEditor.AddConnector(profile, "J1");
+                InvokePrivate(bench, "PopulateConnectors");
+                Application.DoEvents();
+                Assert.Equal(RcmInputFilter.All, filter.SelectedItem);
+                Assert.Equal(importedCount, grid.Rows.Count);
+                filter.SelectedItem = RcmInputFilter.Unassigned;
+                Application.DoEvents();
+                Assert.Equal(importedCount, grid.Rows.Count);
+
+                RcmPinProfile throttle1 = profile.Pins.Single(pin => pin.Function == "Throttle 1");
+                RcmProfileEditor.AssignPhysical(profile, throttle1.Id, "J1", "A");
+                filter.SelectedItem = RcmInputFilter.All;
+                InvokePrivate(bench, "RenderTable", throttle1.Id);
+                Application.DoEvents();
+                Assert.Equal(importedCount, grid.Rows.Count);
+                filter.SelectedItem = "J1";
+                Application.DoEvents();
+                DataGridViewRow assigned = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+                Assert.Equal("J1", Convert.ToString(assigned.Cells["connectorColumn"].Value));
+                Assert.Equal("A", Convert.ToString(assigned.Cells["pinColumn"].Value));
+
+                InvokeLoadCcf(form, secondPath);
+                Application.DoEvents();
+                Assert.Contains("CLASS171_replacement.ccf", mainStatus.Text, StringComparison.Ordinal);
+                Assert.Contains("CLASS171_replacement.ccf", benchStatus.Text, StringComparison.Ordinal);
+                CcfDocument benchDocument = GetPrivateField<CcfDocument>(bench, "_document");
+                Assert.Equal(Path.GetFullPath(secondPath), benchDocument.SourcePath);
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+    }
+
+    [Fact]
+    public void RelevantCcfEditIsPushedToBenchBeforeNewProfileCreation()
+    {
+        RunInStaThread(() =>
+        {
+            string ccfPath = FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf");
+            using var form = new MainForm();
+            form.Show();
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            tabs.SelectedIndex = 5;
+            Application.DoEvents();
+            InvokeLoadCcf(form, ccfPath);
+            Application.DoEvents();
+
+            OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
+            CcfDocument hostDocument = GetPrivateField<CcfDocument>(form, "_document");
+            CcfEditService.SetRecordName(hostDocument, 1, "Throttle 2 edit");
+            InvokePrivate(form, "RefreshAfterEdit", 1);
+            Application.DoEvents();
+
+            Assert.Same(hostDocument, GetPrivateField<CcfDocument>(bench, "_document"));
+            Assert.Contains("CCF loaded", Find<Label>(form, "ccfStatusLabel").Text, StringComparison.Ordinal);
+            Find<Button>(form, "createRcmProfileButton").PerformClick();
+            Application.DoEvents();
+            RcmProfile profile = GetPrivateField<RcmProfile>(bench, "_rcmProfile");
+            Assert.Equal("Throttle 2 edit", profile.Pins.Single(pin => pin.CcfReference?.RecordA == 1).Function);
+        });
+    }
+
     [Fact]
     public void EveryTabRendersExpectedControlsAndLoadedCcfData()
     {
@@ -251,6 +363,24 @@ public sealed class MainFormLayoutTests
     private static T Find<T>(Control root, string name) where T : Control =>
         root.Controls.Find(name, true).OfType<T>().SingleOrDefault()
         ?? throw new Xunit.Sdk.XunitException($"Control '{name}' was not found.");
+
+    private static void AssertImported(
+        RcmProfile profile,
+        int recordA,
+        int recordB,
+        int card,
+        int channel,
+        string function)
+    {
+        RcmPinProfile pin = profile.Pins.Single(candidate => candidate.CcfReference?.RecordA == recordA);
+        Assert.Equal(recordB, pin.CcfReference!.RecordB);
+        Assert.Equal(card, pin.CcfReference.LogicalCard);
+        Assert.Equal(channel, pin.CcfReference.LogicalChannel);
+        Assert.Equal(function, pin.Function);
+        Assert.Equal(string.Empty, pin.Connector);
+        Assert.Equal(string.Empty, pin.Pin);
+        Assert.Equal(RcmResultStates.Unassigned, pin.RcmResult);
+    }
 
     private static T FindToolStripItem<T>(Control root, string name) where T : ToolStripItem
     {

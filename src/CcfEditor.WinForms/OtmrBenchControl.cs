@@ -36,6 +36,14 @@ public partial class OtmrBenchControl : UserControl
         RefreshCcfFromHost();
     }
 
+    internal void SetCurrentCcf(CcfDocument? document)
+    {
+        _document = document;
+        UpdateCcfStatus();
+        UpdateCommandAvailability();
+        RenderTable();
+    }
+
     public void ReportRawLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -104,10 +112,7 @@ public partial class OtmrBenchControl : UserControl
 
     private void RefreshCcfFromHost()
     {
-        _document = (FindForm() as MainForm)?.GetCurrentCcfForBench();
-        UpdateCcfStatus();
-        UpdateCommandAvailability();
-        RenderTable();
+        SetCurrentCcf((FindForm() as MainForm)?.GetCurrentCcfForBench());
     }
 
     private void CreateRcmProfileButton_Click(object? sender, EventArgs e)
@@ -396,8 +401,12 @@ public partial class OtmrBenchControl : UserControl
     {
         if (_rcmProfile is not null)
         {
+            string loaded = _document is null
+                ? "none"
+                : Path.GetFileName(_document.SourcePath ?? "opened CCF");
             ccfStatusLabel.Text =
-                $"{RcmProfileJson.GetCcfStatus(_rcmProfile, _document)} | source {_rcmProfile.SourceCcfFilename} | " +
+                $"{RcmProfileJson.GetCcfStatus(_rcmProfile, _document)} | loaded {loaded} | " +
+                $"profile source {_rcmProfile.SourceCcfFilename} | " +
                 $"SHA-256 {ShortHash(_rcmProfile.SourceCcfSha256)}";
         }
         else
