@@ -7,7 +7,7 @@ public partial class MainForm
 {
     private SqliteOtmrRecordingStore? _recordingStore;
 
-    protected override async void OnShown(EventArgs e)
+    protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
 
@@ -19,18 +19,33 @@ public partial class MainForm
         if (_recordingStore is not null)
             return;
 
-        _recordingStore = new SqliteOtmrRecordingStore(OtmrDatabasePaths.DefaultDatabasePath);
-        otmrLiveControl.SetRecordingStore(_recordingStore);
-        otmrBenchControl.SetRecordingStore(_recordingStore);
-
+        SqliteOtmrRecordingStore? store = null;
         try
         {
-            // Initializes/version-checks the schema and recovers any session that
-            // was left in RECORDING by a previous crash or power interruption.
-            await _recordingStore.InitializeAsync();
+            store = new SqliteOtmrRecordingStore(OtmrDatabasePaths.DefaultDatabasePath);
+
+            // Finish initialization/version checking/recovery before OnShown returns.
+            // This prevents an async initialization continuation from racing form
+            // disposal during startup/tests and guarantees the controls only receive
+            // a recording store after it is ready.
+            store.InitializeAsync().GetAwaiter().GetResult();
+
+            _recordingStore = store;
+            otmrLiveControl.SetRecordingStore(store);
+            otmrBenchControl.SetRecordingStore(store);
+            store = null;
         }
         catch (Exception ex)
         {
+            try
+            {
+                store?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // Initialization already failed; preserve the original error below.
+            }
+
             MessageBox.Show(
                 this,
                 $"The local OTMR database could not be initialized.\r\n\r\n{ex.Message}\r\n\r\nDatabase: {OtmrDatabasePaths.DefaultDatabasePath}",
