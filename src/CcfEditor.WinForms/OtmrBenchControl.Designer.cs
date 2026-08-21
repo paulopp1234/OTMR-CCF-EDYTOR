@@ -56,6 +56,7 @@ partial class OtmrBenchControl
     private Button captureVoltageAppliedButton = null!;
     private Label voltageAppliedStatusLabel = null!;
     private FlowLayoutPanel actionPanel = null!;
+    private Button editSelectedWorkflowButton = null!;
     private Button compareStatesButton = null!;
     private Button resetInputButton = null!;
     private GroupBox evidenceGroup = null!;
@@ -124,6 +125,7 @@ partial class OtmrBenchControl
         captureVoltageAppliedButton = new Button();
         voltageAppliedStatusLabel = new Label();
         actionPanel = new FlowLayoutPanel();
+        editSelectedWorkflowButton = new Button();
         compareStatesButton = new Button();
         resetInputButton = new Button();
         evidenceGroup = new GroupBox();
@@ -315,10 +317,17 @@ partial class OtmrBenchControl
         // mainSplit
         //
         mainSplit.Dock = DockStyle.Fill;
+        mainSplit.FixedPanel = FixedPanel.Panel2;
+        mainSplit.IsSplitterFixed = false;
         mainSplit.Name = "mainSplit";
+        mainSplit.Size = new Size(1434, 520);
         mainSplit.Panel1.Controls.Add(rcmGrid);
+        mainSplit.Panel1MinSize = 420;
         mainSplit.Panel2.Controls.Add(workflowLayout);
-        mainSplit.SplitterDistance = 900;
+        mainSplit.Panel2MinSize = 480;
+        mainSplit.SplitterDistance = 940;
+        mainSplit.SplitterWidth = 6;
+        mainSplit.SplitterMoved += MainSplit_SplitterMoved;
         //
         // rcmGrid
         //
@@ -333,23 +342,23 @@ partial class OtmrBenchControl
         rcmGrid.Name = "rcmGrid";
         rcmGrid.ReadOnly = false;
         rcmGrid.RowHeadersVisible = false;
+        rcmGrid.ScrollBars = ScrollBars.Both;
         rcmGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         rcmGrid.CurrentCellChanged += RcmGrid_SelectionChanged;
         rcmGrid.CellEndEdit += RcmGrid_CellEndEdit;
         rcmGrid.CellValidating += RcmGrid_CellValidating;
-        rcmGrid.DataError += RcmGrid_DataError;
         rcmGrid.EditingControlShowing += RcmGrid_EditingControlShowing;
         connectorColumn.DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox;
         connectorColumn.FlatStyle = FlatStyle.Flat;
-        connectorColumn.HeaderText = "Connector"; connectorColumn.Name = "connectorColumn"; connectorColumn.ReadOnly = false; connectorColumn.Width = 90;
+        connectorColumn.HeaderText = "Connector"; connectorColumn.Name = "connectorColumn"; connectorColumn.ReadOnly = false; connectorColumn.Width = 85;
         pinColumn.HeaderText = "Pin"; pinColumn.Name = "pinColumn"; pinColumn.ReadOnly = false; pinColumn.Width = 55;
-        functionColumn.HeaderText = "Function"; functionColumn.Name = "functionColumn"; functionColumn.ReadOnly = true; functionColumn.Width = 150;
-        expectedCcfColumn.HeaderText = "Expected CCF"; expectedCcfColumn.Name = "expectedCcfColumn"; expectedCcfColumn.ReadOnly = true; expectedCcfColumn.Width = 180;
-        voltageRemovedColumn.HeaderText = "Voltage Removed"; voltageRemovedColumn.Name = "voltageRemovedColumn"; voltageRemovedColumn.ReadOnly = true; voltageRemovedColumn.Width = 135;
-        voltageAppliedColumn.HeaderText = "+24V Applied"; voltageAppliedColumn.Name = "voltageAppliedColumn"; voltageAppliedColumn.ReadOnly = true; voltageAppliedColumn.Width = 135;
-        stateDifferenceColumn.HeaderText = "State Difference"; stateDifferenceColumn.Name = "stateDifferenceColumn"; stateDifferenceColumn.ReadOnly = true; stateDifferenceColumn.Width = 170;
-        decoderColumn.HeaderText = "Decoder"; decoderColumn.Name = "decoderColumn"; decoderColumn.ReadOnly = true; decoderColumn.Width = 100;
-        rcmResultColumn.HeaderText = "RCM Result"; rcmResultColumn.Name = "rcmResultColumn"; rcmResultColumn.ReadOnly = true; rcmResultColumn.Width = 170;
+        functionColumn.HeaderText = "Function"; functionColumn.Name = "functionColumn"; functionColumn.ReadOnly = true; functionColumn.Width = 140;
+        expectedCcfColumn.HeaderText = "Expected CCF"; expectedCcfColumn.Name = "expectedCcfColumn"; expectedCcfColumn.ReadOnly = true; expectedCcfColumn.Width = 200;
+        voltageRemovedColumn.HeaderText = "Voltage Removed"; voltageRemovedColumn.Name = "voltageRemovedColumn"; voltageRemovedColumn.ReadOnly = true; voltageRemovedColumn.Width = 120;
+        voltageAppliedColumn.HeaderText = "+24V Applied"; voltageAppliedColumn.Name = "voltageAppliedColumn"; voltageAppliedColumn.ReadOnly = true; voltageAppliedColumn.Width = 120;
+        stateDifferenceColumn.HeaderText = "State Difference"; stateDifferenceColumn.Name = "stateDifferenceColumn"; stateDifferenceColumn.ReadOnly = true; stateDifferenceColumn.Width = 150;
+        decoderColumn.HeaderText = "Decoder"; decoderColumn.Name = "decoderColumn"; decoderColumn.ReadOnly = true; decoderColumn.Width = 90;
+        rcmResultColumn.HeaderText = "RCM Result"; rcmResultColumn.Name = "rcmResultColumn"; rcmResultColumn.ReadOnly = true; rcmResultColumn.Width = 150;
         //
         // workflowLayout
         //
@@ -361,16 +370,18 @@ partial class OtmrBenchControl
         workflowLayout.Controls.Add(voltageAppliedGroup, 0, 2);
         workflowLayout.Controls.Add(actionPanel, 0, 3);
         workflowLayout.Controls.Add(evidenceGroup, 0, 4);
+        workflowLayout.AutoScroll = true;
         workflowLayout.Dock = DockStyle.Fill;
         workflowLayout.Name = "workflowLayout";
         workflowLayout.Padding = new Padding(8, 0, 0, 0);
         workflowLayout.RowCount = 5;
         workflowLayout.RowStyles.Clear();
-        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 82F));
-        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96F));
-        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96F));
-        workflowLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         workflowLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        selectedPinLabel.AutoSize = true;
         selectedPinLabel.Dock = DockStyle.Fill;
         selectedPinLabel.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
         selectedPinLabel.Name = "selectedPinLabel";
@@ -380,14 +391,19 @@ partial class OtmrBenchControl
         // voltage removed workflow
         //
         voltageRemovedGroup.Controls.Add(voltageRemovedPanel);
+        voltageRemovedGroup.AutoSize = true;
+        voltageRemovedGroup.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         voltageRemovedGroup.Dock = DockStyle.Fill;
         voltageRemovedGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         voltageRemovedGroup.Name = "voltageRemovedGroup";
+        voltageRemovedGroup.MinimumSize = new Size(0, 108);
         voltageRemovedGroup.Text = "STEP 1 — TEST VOLTAGE REMOVED";
         voltageRemovedPanel.Controls.Add(voltageRemovedInstructionLabel);
         voltageRemovedPanel.Controls.Add(captureVoltageRemovedButton);
         voltageRemovedPanel.Controls.Add(voltageRemovedStatusLabel);
         voltageRemovedPanel.Dock = DockStyle.Fill;
+        voltageRemovedPanel.AutoSize = true;
+        voltageRemovedPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         voltageRemovedPanel.FlowDirection = FlowDirection.TopDown;
         voltageRemovedPanel.Name = "voltageRemovedPanel";
         voltageRemovedPanel.Padding = new Padding(6);
@@ -408,14 +424,19 @@ partial class OtmrBenchControl
         // voltage applied workflow
         //
         voltageAppliedGroup.Controls.Add(voltageAppliedPanel);
+        voltageAppliedGroup.AutoSize = true;
+        voltageAppliedGroup.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         voltageAppliedGroup.Dock = DockStyle.Fill;
         voltageAppliedGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         voltageAppliedGroup.Name = "voltageAppliedGroup";
+        voltageAppliedGroup.MinimumSize = new Size(0, 108);
         voltageAppliedGroup.Text = "STEP 2 — +24 V APPLIED";
         voltageAppliedPanel.Controls.Add(voltageAppliedInstructionLabel);
         voltageAppliedPanel.Controls.Add(captureVoltageAppliedButton);
         voltageAppliedPanel.Controls.Add(voltageAppliedStatusLabel);
         voltageAppliedPanel.Dock = DockStyle.Fill;
+        voltageAppliedPanel.AutoSize = true;
+        voltageAppliedPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         voltageAppliedPanel.FlowDirection = FlowDirection.TopDown;
         voltageAppliedPanel.Name = "voltageAppliedPanel";
         voltageAppliedPanel.Padding = new Padding(6);
@@ -435,10 +456,17 @@ partial class OtmrBenchControl
         //
         // actionPanel
         //
+        actionPanel.Controls.Add(editSelectedWorkflowButton);
         actionPanel.Controls.Add(compareStatesButton);
         actionPanel.Controls.Add(resetInputButton);
+        actionPanel.AutoSize = true;
+        actionPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         actionPanel.Dock = DockStyle.Fill;
         actionPanel.Name = "actionPanel";
+        editSelectedWorkflowButton.AutoSize = true;
+        editSelectedWorkflowButton.Name = "editSelectedWorkflowButton";
+        editSelectedWorkflowButton.Text = "Edit Selected Input";
+        editSelectedWorkflowButton.Click += EditInputButton_Click;
         compareStatesButton.AutoSize = true;
         compareStatesButton.Name = "compareStatesButton";
         compareStatesButton.Text = "Compare States";
@@ -460,9 +488,9 @@ partial class OtmrBenchControl
         evidenceTextBox.Multiline = true;
         evidenceTextBox.Name = "evidenceTextBox";
         evidenceTextBox.ReadOnly = true;
-        evidenceTextBox.ScrollBars = ScrollBars.Both;
+        evidenceTextBox.ScrollBars = ScrollBars.Vertical;
         evidenceTextBox.Text = "Create or open an RCM profile, then select a physical input.";
-        evidenceTextBox.WordWrap = false;
+        evidenceTextBox.WordWrap = true;
         //
         // status and timer
         //

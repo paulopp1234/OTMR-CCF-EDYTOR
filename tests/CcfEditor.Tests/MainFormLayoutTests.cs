@@ -284,6 +284,8 @@ public sealed class MainFormLayoutTests
             int originalCount = profile.Pins.Count;
             RcmPinProfile logical = profile.Pins.First();
             Guid id = logical.Id;
+            logical.VoltageRemoved.CandidateRawSignature = "retained-evidence";
+            RcmStateEvidence originalEvidence = logical.VoltageRemoved;
             (int? A, int? B, int? Card, int? Channel) mapping =
                 (logical.CcfReference!.RecordA, logical.CcfReference.RecordB,
                     logical.CcfReference.LogicalCard, logical.CcfReference.LogicalChannel);
@@ -299,21 +301,41 @@ public sealed class MainFormLayoutTests
             Assert.True(grid.BeginEdit(true));
             Assert.IsType<DataGridViewComboBoxEditingControl>(grid.EditingControl).Text = "J1";
             Assert.True(grid.EndEdit());
+            Assert.Same(row, grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id)));
             Application.DoEvents();
 
-            row = grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id));
+            Assert.Same(row, grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id)));
             grid.CurrentCell = row.Cells["pinColumn"];
             Assert.True(grid.BeginEdit(true));
             Assert.IsType<DataGridViewTextBoxEditingControl>(grid.EditingControl).Text = "A";
             Assert.True(grid.EndEdit());
+            Assert.Same(row, grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id)));
             Application.DoEvents();
 
             RcmPinProfile assigned = profile.GetInput(id);
+            Assert.Equal(id, assigned.Id);
             Assert.Equal("J1", assigned.Connector);
             Assert.Equal("A", assigned.Pin);
             Assert.Equal(mapping, (assigned.CcfReference!.RecordA, assigned.CcfReference.RecordB,
                 assigned.CcfReference.LogicalCard, assigned.CcfReference.LogicalChannel));
+            Assert.Same(originalEvidence, assigned.VoltageRemoved);
+            Assert.Equal("retained-evidence", assigned.VoltageRemoved.CandidateRawSignature);
             Assert.Equal(originalCount, profile.Pins.Count);
+            Assert.Contains("J1-A", Find<Label>(form, "selectedPinLabel").Text, StringComparison.Ordinal);
+
+            grid.CurrentCell = row.Cells["pinColumn"];
+            Assert.True(grid.BeginEdit(true));
+            Assert.IsType<DataGridViewTextBoxEditingControl>(grid.EditingControl).Text = "B";
+            Assert.True(grid.EndEdit());
+            Assert.Same(row, grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id)));
+            Application.DoEvents();
+            Assert.Equal(id, assigned.Id);
+            Assert.Equal("J1", assigned.Connector);
+            Assert.Equal("B", assigned.Pin);
+            Assert.Same(originalEvidence, assigned.VoltageRemoved);
+            Assert.Equal(mapping, (assigned.CcfReference!.RecordA, assigned.CcfReference.RecordB,
+                assigned.CcfReference.LogicalCard, assigned.CcfReference.LogicalChannel));
+            Assert.Contains("J1-B", Find<Label>(form, "selectedPinLabel").Text, StringComparison.Ordinal);
 
             RcmPinProfile secondLogical = profile.Pins[1];
             row = grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, secondLogical.Id));
@@ -342,6 +364,116 @@ public sealed class MainFormLayoutTests
             Application.DoEvents();
             Assert.Equal(originalCount, grid.Rows.Count);
             Assert.Contains("Assigned physical inputs: 2", Find<Label>(form, "progressLabel").Text, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void CompletedAssignmentLeavesUnassignedFilterOnlyAfterEditTransactionUnwinds()
+    {
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm();
+            form.Show();
+            InvokeLoadCcf(form, FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf"));
+            Find<TabControl>(form, "tabs").SelectedIndex = 5;
+            Application.DoEvents();
+            Find<Button>(form, "createRcmProfileButton").PerformClick();
+            Application.DoEvents();
+
+            OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
+            RcmProfile profile = GetPrivateField<RcmProfile>(bench, "_rcmProfile");
+            RcmProfileEditor.AddConnector(profile, "J1");
+            InvokePrivate(bench, "PopulateConnectors");
+            ComboBox filter = Find<ComboBox>(form, "connectorComboBox");
+            filter.SelectedItem = RcmInputFilter.Unassigned;
+            Application.DoEvents();
+
+            DataGridView grid = Find<DataGridView>(form, "rcmGrid");
+            DataGridViewRow row = grid.Rows[0];
+            Guid id = Assert.IsType<Guid>(row.Tag);
+            RcmPinProfile input = profile.GetInput(id);
+
+            grid.CurrentCell = row.Cells["connectorColumn"];
+            Assert.True(grid.BeginEdit(true));
+            Assert.IsType<DataGridViewComboBoxEditingControl>(grid.EditingControl).Text = "J1";
+            Assert.True(grid.EndEdit());
+            Assert.Contains(row, grid.Rows.Cast<DataGridViewRow>());
+            Application.DoEvents();
+
+            row = grid.Rows.Cast<DataGridViewRow>().Single(candidate => Equals(candidate.Tag, id));
+            grid.CurrentCell = row.Cells["pinColumn"];
+            Assert.True(grid.BeginEdit(true));
+            Assert.IsType<DataGridViewTextBoxEditingControl>(grid.EditingControl).Text = "A";
+            Assert.True(grid.EndEdit());
+            Assert.Contains(row, grid.Rows.Cast<DataGridViewRow>());
+            Assert.Equal(id, input.Id);
+            Application.DoEvents();
+
+            Assert.DoesNotContain(grid.Rows.Cast<DataGridViewRow>(), candidate => Equals(candidate.Tag, id));
+            Assert.Equal("J1", input.Connector);
+            Assert.Equal("A", input.Pin);
+        });
+    }
+
+    [Fact]
+    public void RcmWorkflowPanelWrapsUnassignedDetailsAtDesktopAndSmallerSizes()
+    {
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm
+            {
+                StartPosition = FormStartPosition.Manual,
+                Location = Point.Empty,
+                Size = new Size(1920, 1000)
+            };
+            form.Show();
+            InvokeLoadCcf(form, FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf"));
+            Find<TabControl>(form, "tabs").SelectedIndex = 5;
+            Application.DoEvents();
+            Find<Button>(form, "createRcmProfileButton").PerformClick();
+            Application.DoEvents();
+
+            DataGridView grid = Find<DataGridView>(form, "rcmGrid");
+            DataGridViewRow brake = grid.Rows.Cast<DataGridViewRow>()
+                .Single(row => Convert.ToString(row.Cells["functionColumn"].Value) == "Brake 1");
+            grid.CurrentCell = brake.Cells["functionColumn"];
+            brake.Selected = true;
+            Application.DoEvents();
+
+            SplitContainer split = Find<SplitContainer>(form, "mainSplit");
+            Label summary = Find<Label>(form, "selectedPinLabel");
+            Label removedInstruction = Find<Label>(form, "voltageRemovedInstructionLabel");
+            Label appliedInstruction = Find<Label>(form, "voltageAppliedInstructionLabel");
+            TextBox evidence = Find<TextBox>(form, "evidenceTextBox");
+            Assert.Equal(480, split.Panel2MinSize);
+            Assert.False(split.IsSplitterFixed);
+            Assert.True(split.Panel2.Width >= 480, $"Workflow panel is only {split.Panel2.Width}px wide.");
+            double workflowRatio = (double)split.Panel2.Width / split.Width;
+            Assert.InRange(workflowRatio, 0.27, 0.36);
+            Assert.Contains("UNASSIGNED", summary.Text, StringComparison.Ordinal);
+            Assert.Contains("Brake 1", summary.Text, StringComparison.Ordinal);
+            Assert.Contains("Expected CCF records: 10 ↔ 22", summary.Text, StringComparison.Ordinal);
+            Assert.Contains("Card 0 / Channel 10", summary.Text, StringComparison.Ordinal);
+            Assert.Contains("Connector: NOT ASSIGNED", summary.Text, StringComparison.Ordinal);
+            Assert.Contains("Pin: NOT ASSIGNED", summary.Text, StringComparison.Ordinal);
+            Assert.Equal("PHYSICAL MAPPING REQUIRED", removedInstruction.Text);
+            Assert.Equal("PHYSICAL MAPPING REQUIRED", appliedInstruction.Text);
+            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.False(Find<Button>(form, "compareStatesButton").Enabled);
+            Assert.True(Find<Button>(form, "editSelectedWorkflowButton").Enabled);
+            Assert.True(evidence.WordWrap);
+            Assert.Equal(ScrollBars.Vertical, evidence.ScrollBars);
+            Assert.Contains("Assign Connector and Pin before performing an RCM electrical test.", evidence.Text,
+                StringComparison.Ordinal);
+
+            form.Size = new Size(1200, 760);
+            Application.DoEvents();
+            Assert.True(split.Panel2.Width >= 480, $"Smaller workflow panel is only {split.Panel2.Width}px wide.");
+            Assert.True(split.Panel1.Width >= split.Panel1MinSize,
+                $"Smaller grid panel is only {split.Panel1.Width}px wide.");
+            Assert.True(summary.Height >= summary.PreferredHeight,
+                $"Selected input summary is clipped: {summary.Height}px versus preferred {summary.PreferredHeight}px.");
         });
     }
 
