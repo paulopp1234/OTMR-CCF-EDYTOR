@@ -1,4 +1,5 @@
 using CcfEditor.Otmr.Capture;
+using CcfEditor.Otmr.Storage;
 using CcfEditor.Otmr.Transport;
 
 namespace CcfEditor.Otmr.Live;
@@ -16,6 +17,7 @@ public sealed class OtmrLiveService : IDisposable
     private readonly object _stateSync = new();
     private readonly OtmrLiveStartTiming _startTiming;
     private OtmrSerialSettings? _settings;
+    private IOtmrRecordingStore? _recordingStore;
     private TaskCompletionSource<bool>? _replyCompletion;
     private OtmrLiveState _state = OtmrLiveState.Disconnected;
     private bool _disposed;
@@ -45,6 +47,9 @@ public sealed class OtmrLiveService : IDisposable
     public event EventHandler<OtmrConnectionChangedEventArgs>? ConnectionChanged;
     public event EventHandler<OtmrLiveErrorEventArgs>? ErrorOccurred;
     public event EventHandler<OtmrLiveStateChangedEventArgs>? StateChanged;
+
+    public void SetRecordingStore(IOtmrRecordingStore? recordingStore) =>
+        _recordingStore = recordingStore;
 
     public Task ConnectAsync(OtmrSerialSettings settings, CancellationToken cancellationToken = default)
     {
@@ -195,6 +200,7 @@ public sealed class OtmrLiveService : IDisposable
         {
             if (State == OtmrLiveState.WaitingForLiveFrames)
                 SetState(OtmrLiveState.LiveActive);
+            _recordingStore?.TryRecordLiveFrame(timestamp, frame);
             FrameReceived?.Invoke(this, new OtmrLiveFrameEventArgs(timestamp, frame));
         }
     }
@@ -213,6 +219,7 @@ public sealed class OtmrLiveService : IDisposable
     {
         lock (_captureSync)
             _capture.Add(entry);
+        _recordingStore?.TryRecordRaw(entry);
         CaptureAdded?.Invoke(this, new OtmrCaptureEntryEventArgs(entry));
     }
 
