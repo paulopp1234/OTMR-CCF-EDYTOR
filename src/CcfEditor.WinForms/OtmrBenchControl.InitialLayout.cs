@@ -5,19 +5,16 @@ public partial class OtmrBenchControl
     private bool _finalInitialSplitterApplied;
     private bool _finalInitialSplitterScheduled;
 
-    protected override void OnVisibleChanged(EventArgs e)
+    internal void ScheduleFinalInitialLayout()
     {
-        base.OnVisibleChanged(e);
-
         if (!Visible || _finalInitialSplitterApplied || _finalInitialSplitterScheduled ||
             !IsHandleCreated || IsDisposed)
         {
             return;
         }
 
-        // The bench control lives on an initially hidden tab. Its OnLoad dimensions
-        // are therefore not the final visible tab dimensions. Wait one UI turn after
-        // the tab becomes visible, then apply the intended initial split exactly once.
+        // The bench control lives on an initially hidden tab. Wait one UI turn after
+        // the host selects that tab so WinForms has applied the real visible width.
         _finalInitialSplitterScheduled = true;
         BeginInvoke((Action)(() =>
         {
