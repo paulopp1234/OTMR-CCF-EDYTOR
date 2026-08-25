@@ -66,6 +66,39 @@ public sealed class OtmrLiveFrameAssemblerTests
     }
 
     [Fact]
+    public void ArrowvaleLeadingFfThenSplitFbFbHeader_PreservesAndAssemblesTheFirstFrame()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        Assert.Empty(assembler.Append(new byte[] { 0xFF, 0xFB }));
+        Assert.Equal(1, assembler.BufferedByteCount);
+        OtmrLiveFrame frame = Assert.Single(assembler.Append(
+            new byte[] { 0xFB, 0x38, 0x89, 0x38, 0x88, 0xFF }));
+
+        Assert.Equal(
+            new byte[] { 0xFB, 0xFB, 0x38, 0x89, 0x38, 0x88, 0xFF },
+            frame.GetDataSnapshot());
+        Assert.Equal(0, assembler.BufferedByteCount);
+    }
+
+    [Fact]
+    public void D2StatusBytesBetweenFrames_AreDiscardedWithoutLosingEitherFrame()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        IReadOnlyList<OtmrLiveFrame> frames = assembler.Append(new byte[]
+        {
+            0xFB, 0xFB, 0x38, 0x89, 0xFF,
+            0xD2, 0x0C,
+            0xFB, 0xFB, 0x38, 0x88, 0xFF
+        });
+
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x38, 0x89, 0xFF }, frames[0].GetDataSnapshot());
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x38, 0x88, 0xFF }, frames[1].GetDataSnapshot());
+    }
+
+    [Fact]
     public void PartialFrame_RemainsBufferedUntilTerminatorArrives()
     {
         var assembler = new OtmrLiveFrameAssembler();

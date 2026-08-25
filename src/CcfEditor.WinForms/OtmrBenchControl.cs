@@ -92,7 +92,14 @@ public partial class OtmrBenchControl : UserControl
 
         _otmrLiveState = state;
         UpdateCommandAvailability();
-        if (state != OtmrLiveState.LiveActive && _captureCoordinator.IsCapturing)
+        if (!CanAcceptBenchLiveFrames(state) && _captureCoordinator.IsArmed)
+        {
+            armTimeoutTimer.Stop();
+            _captureCoordinator.CancelArmed();
+            UpdateWorkflow();
+            statusLabel.Text = "OTMR live reception stopped while armed. No RCM evidence was created.";
+        }
+        else if (!CanAcceptBenchLiveFrames(state) && _captureCoordinator.IsCapturing)
             statusLabel.Text = "OTMR live stream is no longer active. No further RCM frames will be accepted.";
     }
 
@@ -108,14 +115,30 @@ public partial class OtmrBenchControl : UserControl
             return;
         }
 
-        if (_otmrLiveState != OtmrLiveState.LiveActive || !_captureCoordinator.AddFrame(timestamp, frame))
+        if (!CanAcceptBenchLiveFrames(_otmrLiveState) || !_captureCoordinator.IsCapturing)
             return;
 
+        bool firstFrame = _captureCoordinator.IsArmed;
+        if (!_captureCoordinator.AddFrame(timestamp, frame))
+            return;
+
+        if (firstFrame)
+        {
+            armTimeoutTimer.Stop();
+            captureWindowTimer.Interval = Math.Max(100, decimal.ToInt32(captureSecondsNumeric.Value * 1000M));
+            captureWindowTimer.Start();
+        }
+
         UpdateCaptureStatusOnly();
-        statusLabel.Text =
-            $"CAPTURING {_captureCoordinator.ActivePinKey}: complete frame retained at " +
-            $"{timestamp.ToLocalTime():HH:mm:ss.fff}. Raw evidence only; decoder NOT VERIFIED.";
+        statusLabel.Text = firstFrame
+            ? $"RESPONSE DETECTED for {_captureCoordinator.ActivePinKey}. First complete frame retained; " +
+              $"capturing for {captureSecondsNumeric.Value:0.0} seconds."
+            : $"CAPTURING {_captureCoordinator.ActivePinKey}: complete frame retained at " +
+              $"{timestamp.ToLocalTime():HH:mm:ss.fff}. Raw evidence only; decoder NOT VERIFIED.";
     }
+
+    internal static bool CanAcceptBenchLiveFrames(OtmrLiveState state) =>
+        state is OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.LiveActive;
 
     private RcmPinMapImportResult LoadPinMap(string path)
     {
@@ -497,7 +520,7 @@ public partial class OtmrBenchControl : UserControl
 
     private void BeginCapture(RcmElectricalTestState state)
     {
-        if (_otmrLiveState != OtmrLiveState.LiveActive)
+        if (!CanAcceptBenchLiveFrames(_otmrLiveState))
         {
             MessageBox.Show(
                 this,
@@ -514,14 +537,14 @@ public partial class OtmrBenchControl : UserControl
 
         try
         {
-            _captureCoordinator.Begin(pin, state, DateTimeOffset.Now);
-            captureWindowTimer.Interval = Math.Max(100, decimal.ToInt32(captureSecondsNumeric.Value * 1000M));
-            captureWindowTimer.Start();
+            _captureCoordinator.BeginArmed(pin, state, DateTimeOffset.Now);
+            armTimeoutTimer.Start();
             RenderTable(pin.Id);
+            UpdateCaptureStatusOnly();
             UpdateCommandAvailability();
             statusLabel.Text = state == RcmElectricalTestState.VoltageRemoved
-                ? $"CAPTURING {pin.DisplayKey}: operator condition = TEST VOLTAGE REMOVED."
-                : $"CAPTURING {pin.DisplayKey}: operator condition = +24 V APPLIED.";
+                ? $"ARMED — NOW REMOVE +24 V FROM {pin.DisplayKey}. Waiting for OTMR response..."
+                : $"ARMED — NOW APPLY +24 V TO {pin.DisplayKey}. Waiting for OTMR response...";
         }
         catch (Exception ex)
         {
@@ -552,6 +575,20 @@ public partial class OtmrBenchControl : UserControl
             statusLabel.Text = ex.Message;
             UpdateCommandAvailability();
         }
+    }
+
+    private void ArmTimeoutTimer_Tick(object? sender, EventArgs e)
+    {
+        armTimeoutTimer.Stop();
+        Guid? inputId = _captureCoordinator.ActiveInputId;
+        string? displayKey = _captureCoordinator.ActivePinKey;
+        if (!_captureCoordinator.CancelArmed())
+            return;
+
+        RenderTable(inputId);
+        UpdateCommandAvailability();
+        statusLabel.Text =
+            $"ARM TIMED OUT for {displayKey}: no complete OTMR frame was received. No evidence was created; arm again when ready.";
     }
 
     private async void CompareStatesButton_Click(object? sender, EventArgs e)
@@ -859,14 +896,24 @@ public partial class OtmrBenchControl : UserControl
 
     private void UpdateCaptureStatusOnly()
     {
-        RcmPinProfile? pin = SelectedProfilePin();
-        if (pin is null)
+        if (SelectedProfilePin() is not RcmPinProfile pin || _captureCoordinator.ActiveInputId != pin.Id)
             return;
 
-        if (_captureCoordinator.ActiveState == RcmElectricalTestState.VoltageRemoved)
-            voltageRemovedStatusLabel.Text = $"CAPTURING | {pin.VoltageRemoved.FrameCount} complete frame(s)";
-        else if (_captureCoordinator.ActiveState == RcmElectricalTestState.VoltageApplied24V)
-            voltageAppliedStatusLabel.Text = $"CAPTURING | {pin.VoltageApplied24V.FrameCount} complete frame(s)";
+        bool removed = _captureCoordinator.ActiveState == RcmElectricalTestState.VoltageRemoved;
+        Label instruction = removed ? voltageRemovedInstructionLabel : voltageAppliedInstructionLabel;
+        Label status = removed ? voltageRemovedStatusLabel : voltageAppliedStatusLabel;
+        if (_captureCoordinator.IsArmed)
+        {
+            instruction.Text = removed
+                ? $"ARMED — NOW REMOVE +24 V FROM {pin.DisplayKey}"
+                : $"ARMED — NOW APPLY +24 V TO {pin.DisplayKey}";
+            status.Text = "ARMED | Waiting for OTMR response...";
+            return;
+        }
+
+        RcmStateEvidence evidence = removed ? pin.VoltageRemoved : pin.VoltageApplied24V;
+        instruction.Text = $"RESPONSE DETECTED — Capturing for {captureSecondsNumeric.Value:0.0} seconds...";
+        status.Text = $"CAPTURING | {evidence.FrameCount} complete frame(s)";
     }
 
     private void UpdateWorkflow()
@@ -912,11 +959,12 @@ public partial class OtmrBenchControl : UserControl
         }
         else
         {
-            voltageRemovedInstructionLabel.Text = $"REMOVE TEST VOLTAGE FROM {pinKey}";
-            voltageAppliedInstructionLabel.Text = $"APPLY +24 V TO {pinKey}";
+            voltageRemovedInstructionLabel.Text = $"BEGIN WITH +24 V APPLIED — then arm removal for {pinKey}";
+            voltageAppliedInstructionLabel.Text = $"BEGIN WITH VOLTAGE REMOVED — then arm +24 V for {pinKey}";
             voltageRemovedStatusLabel.Text = FormatCaptureState(pin, RcmElectricalTestState.VoltageRemoved);
             voltageAppliedStatusLabel.Text = FormatCaptureState(pin, RcmElectricalTestState.VoltageApplied24V);
             evidenceTextBox.Text = BuildEvidenceSummary(pin);
+            UpdateCaptureStatusOnly();
         }
 
         UpdateCommandAvailability();
@@ -927,7 +975,7 @@ public partial class OtmrBenchControl : UserControl
         bool capturing = _captureCoordinator.IsCapturing;
         RcmPinProfile? pin = SelectedProfilePin();
         bool canCapture = _rcmProfile is not null && pin?.PhysicalMappingAssigned == true && pin.Testable &&
-                          _otmrLiveState == OtmrLiveState.LiveActive && !capturing;
+                          CanAcceptBenchLiveFrames(_otmrLiveState) && !capturing;
         createRcmProfileButton.Enabled = _document is not null && !capturing;
         openRcmProfileButton.Enabled = !capturing;
         saveRcmProfileButton.Enabled = _rcmProfile is not null && !capturing;
@@ -939,7 +987,7 @@ public partial class OtmrBenchControl : UserControl
         captureSecondsNumeric.Enabled = !capturing;
         captureVoltageRemovedButton.Enabled = canCapture;
         captureVoltageAppliedButton.Enabled = canCapture;
-        compareStatesButton.Enabled = canCapture && pin!.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested;
+        compareStatesButton.Enabled = canCapture && HasGenuineFrames(pin!.VoltageRemoved) && HasGenuineFrames(pin.VoltageApplied24V);
         resetInputButton.Enabled = _rcmProfile is not null && pin is not null && !capturing;
         addConnectorButton.Enabled = _rcmProfile is not null && !capturing;
         renameConnectorButton.Enabled = _rcmProfile is not null && SpecificConnectorFilter() is not null && !capturing;
@@ -983,9 +1031,12 @@ public partial class OtmrBenchControl : UserControl
             ? pin.VoltageRemoved
             : pin.VoltageApplied24V;
         if (evidence.Tested)
-            return $"CAPTURED | {evidence.FrameCount} frames";
+            return $"CAPTURED: {evidence.FrameCount} complete frame(s)";
         return evidence.NoOtmrData ? "NO OTMR DATA" : "NOT CAPTURED";
     }
+
+    private static bool HasGenuineFrames(RcmStateEvidence evidence) =>
+        evidence.Tested && evidence.FrameCount > 0;
 
     private static string BuildSelectedInputSummary(RcmPinProfile pin, RcmCcfReference? ccf)
     {
@@ -1097,6 +1148,7 @@ public partial class OtmrBenchControl : UserControl
     {
         _closing = true;
         captureWindowTimer.Stop();
+        armTimeoutTimer.Stop();
         base.OnHandleDestroyed(e);
     }
 }

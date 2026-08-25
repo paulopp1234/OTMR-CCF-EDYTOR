@@ -176,10 +176,12 @@ public static class OtmrLiveStartProtocol
 
 public sealed record OtmrLiveStartTiming(
     TimeSpan StageReplyTimeout,
+    TimeSpan FinalReplyToFinalCommandDelay,
     TimeSpan FinalCommandToCloseDelay)
 {
     public static OtmrLiveStartTiming HardwareDefault { get; } = new(
         TimeSpan.FromSeconds(3),
+        TimeSpan.FromMilliseconds(80.5),
         TimeSpan.FromMilliseconds(17.6));
 }
 

@@ -28,6 +28,25 @@ public sealed class SerialOtmrTransport : IOtmrTransport
     public static string[] GetAvailablePorts() =>
         SerialPort.GetPortNames().OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
 
+    internal bool TryGetNativeLiveReceiveStatus(
+        out NativeLiveReceiveStatistics statistics,
+        out string queueStatus)
+    {
+        WindowsNativeLiveSerialPort? native;
+        lock (_sync)
+            native = _nativeLivePort is { IsOpen: true } ? _nativeLivePort : null;
+        if (native is null)
+        {
+            statistics = default;
+            queueStatus = "native live port is not open";
+            return false;
+        }
+
+        statistics = native.GetReceiveStatistics();
+        queueStatus = native.QueryReceiveQueue();
+        return true;
+    }
+
     public async Task ConnectAsync(OtmrSerialSettings settings, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

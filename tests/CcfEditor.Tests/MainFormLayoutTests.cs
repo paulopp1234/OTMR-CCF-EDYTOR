@@ -176,7 +176,7 @@ public sealed class MainFormLayoutTests
                     "Open RCM Profile", "Save RCM Profile", "Save RCM Profile As", "Add Connector",
                     "Rename Connector", "Edit Pin Sequence", "Delete Connector", "Add Input / Pin", "Edit Selected Input",
                     "Assign Next Pin",
-                    "Delete Input / Pin", "Capture Voltage Removed", "Capture +24V Applied",
+                    "Delete Input / Pin", "Arm Voltage Removed", "Arm +24 V Applied",
                     "Compare States", "Reset Test Evidence"
                 }) AssertVisibleText(tabs.SelectedTab!, text);
 
@@ -254,8 +254,8 @@ public sealed class MainFormLayoutTests
             Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
             InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.WaitingForLiveFrames);
             Application.DoEvents();
-            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.True(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
+            Assert.True(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
             InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.LiveActive);
             Application.DoEvents();
             Assert.True(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
@@ -273,6 +273,66 @@ public sealed class MainFormLayoutTests
             Assert.Equal("NOT TESTABLE", Convert.ToString(returnRow.Cells["voltageRemovedColumn"].Value));
             Assert.Contains("NOT TESTABLE", Find<TextBox>(form, "evidenceTextBox").Text, StringComparison.Ordinal);
             Assert.Equal(sourceBefore, File.ReadAllBytes(ccfPath));
+        });
+    }
+
+    [Fact]
+    public void ArmedBenchAcceptsFirstCompleteFrameWhileLiveSessionIsWaiting()
+    {
+        RunInStaThread(() =>
+        {
+            string ccfPath = FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf");
+            using var form = new MainForm();
+            form.Show();
+            Application.DoEvents();
+            InvokeLoadCcf(form, ccfPath);
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            tabs.SelectedIndex = 5;
+            Find<Button>(form, "createRcmProfileButton").PerformClick();
+            Application.DoEvents();
+
+            OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
+            RcmProfile profile = GetPrivateField<RcmProfile>(bench, "_rcmProfile");
+            RcmPinProfile pin = profile.Pins.Single(candidate => candidate.CcfReference?.RecordA == 0);
+            RcmInputEdit edit = RcmInputEdit.From(pin);
+            edit.Connector = "J1";
+            edit.Pin = "A";
+            edit.Testable = true;
+            RcmProfileEditor.UpdateInput(profile, pin.Id, edit);
+            InvokePrivate(bench, "PopulateConnectors");
+            Find<ComboBox>(form, "connectorComboBox").SelectedItem = "J1";
+            InvokePrivate(bench, "RenderTable", pin.Id);
+            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.WaitingForLiveFrames);
+            Application.DoEvents();
+
+            Button arm = Find<Button>(form, "captureVoltageRemovedButton");
+            Assert.True(arm.Enabled);
+            arm.PerformClick();
+            Application.DoEvents();
+
+            var coordinator = GetPrivateField<RcmCaptureWindowCoordinator>(bench, "_captureCoordinator");
+            var armTimer = GetPrivateField<System.Windows.Forms.Timer>(bench, "armTimeoutTimer");
+            var captureTimer = GetPrivateField<System.Windows.Forms.Timer>(bench, "captureWindowTimer");
+            Assert.True(coordinator.IsArmed);
+            Assert.True(armTimer.Enabled);
+            Assert.False(captureTimer.Enabled);
+            Assert.Empty(pin.VoltageRemoved.CompleteRawFrames);
+
+            OtmrLiveFrame frame = Assert.Single(new OtmrLiveFrameAssembler().Append(
+                new byte[] { 0xFB, 0xFB, 0x38, 0x4A, 0xFF }));
+            bench.ReportRawLiveFrame(DateTimeOffset.UtcNow, frame);
+            Application.DoEvents();
+
+            Assert.True(coordinator.IsCollecting);
+            Assert.False(armTimer.Enabled);
+            Assert.True(captureTimer.Enabled);
+            Assert.Single(pin.VoltageRemoved.CompleteRawFrames);
+            Assert.Contains("RESPONSE DETECTED", Find<Label>(form, "voltageRemovedInstructionLabel").Text,
+                StringComparison.Ordinal);
+
+            InvokePrivate(bench, "CaptureWindowTimer_Tick", null, EventArgs.Empty);
+            Application.DoEvents();
+            Assert.True(pin.VoltageRemoved.Tested);
         });
     }
 

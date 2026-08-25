@@ -63,6 +63,7 @@ partial class OtmrBenchControl
     private TextBox evidenceTextBox = null!;
     private Label statusLabel = null!;
     private System.Windows.Forms.Timer captureWindowTimer = null!;
+    private System.Windows.Forms.Timer armTimeoutTimer = null!;
 
     protected override void Dispose(bool disposing)
     {
@@ -132,6 +133,7 @@ partial class OtmrBenchControl
         evidenceTextBox = new TextBox();
         statusLabel = new Label();
         captureWindowTimer = new System.Windows.Forms.Timer(components);
+        armTimeoutTimer = new System.Windows.Forms.Timer(components);
         rootLayout.SuspendLayout();
         commandPanel.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)captureSecondsNumeric).BeginInit();
@@ -397,7 +399,7 @@ partial class OtmrBenchControl
         voltageRemovedGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         voltageRemovedGroup.Name = "voltageRemovedGroup";
         voltageRemovedGroup.MinimumSize = new Size(0, 108);
-        voltageRemovedGroup.Text = "STEP 1 — TEST VOLTAGE REMOVED";
+        voltageRemovedGroup.Text = "STEP 1 — VOLTAGE REMOVED";
         voltageRemovedPanel.Controls.Add(voltageRemovedInstructionLabel);
         voltageRemovedPanel.Controls.Add(captureVoltageRemovedButton);
         voltageRemovedPanel.Controls.Add(voltageRemovedStatusLabel);
@@ -415,7 +417,7 @@ partial class OtmrBenchControl
         captureVoltageRemovedButton.AutoSize = true;
         captureVoltageRemovedButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         captureVoltageRemovedButton.Name = "captureVoltageRemovedButton";
-        captureVoltageRemovedButton.Text = "Capture Voltage Removed";
+        captureVoltageRemovedButton.Text = "Arm Voltage Removed";
         captureVoltageRemovedButton.Click += CaptureVoltageRemovedButton_Click;
         voltageRemovedStatusLabel.AutoSize = true;
         voltageRemovedStatusLabel.Name = "voltageRemovedStatusLabel";
@@ -448,7 +450,7 @@ partial class OtmrBenchControl
         captureVoltageAppliedButton.AutoSize = true;
         captureVoltageAppliedButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         captureVoltageAppliedButton.Name = "captureVoltageAppliedButton";
-        captureVoltageAppliedButton.Text = "Capture +24V Applied";
+        captureVoltageAppliedButton.Text = "Arm +24 V Applied";
         captureVoltageAppliedButton.Click += CaptureVoltageAppliedButton_Click;
         voltageAppliedStatusLabel.AutoSize = true;
         voltageAppliedStatusLabel.Name = "voltageAppliedStatusLabel";
@@ -500,6 +502,8 @@ partial class OtmrBenchControl
         statusLabel.Text = "RCM evidence capture only. No protocol semantics, PASS, or FAIL are inferred.";
         statusLabel.TextAlign = ContentAlignment.MiddleLeft;
         captureWindowTimer.Tick += CaptureWindowTimer_Tick;
+        armTimeoutTimer.Interval = 10000;
+        armTimeoutTimer.Tick += ArmTimeoutTimer_Tick;
         //
         // OtmrBenchControl
         //

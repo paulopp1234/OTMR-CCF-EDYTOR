@@ -2,12 +2,22 @@ using CcfEditor.Otmr.Live;
 
 namespace CcfEditor.Otmr.Rcm;
 
+public enum RcmCapturePhase
+{
+    Idle,
+    ArmedWaitingForFirstFrame,
+    CapturingAfterFirstFrame
+}
+
 public sealed class RcmCaptureWindowCoordinator
 {
     private RcmPinProfile? _activePin;
     private RcmElectricalTestState? _activeState;
 
     public bool IsCapturing => _activePin is not null;
+    public bool IsArmed => Phase == RcmCapturePhase.ArmedWaitingForFirstFrame;
+    public bool IsCollecting => Phase == RcmCapturePhase.CapturingAfterFirstFrame;
+    public RcmCapturePhase Phase { get; private set; }
     public Guid? ActiveInputId => _activePin?.Id;
     public string? ActivePinKey => _activePin?.DisplayKey;
     public RcmElectricalTestState? ActiveState => _activeState;
@@ -15,10 +25,10 @@ public sealed class RcmCaptureWindowCoordinator
     public event EventHandler<RcmCaptureCompletedEventArgs>? CaptureCompleted;
     public event EventHandler<RcmComparisonCompletedEventArgs>? ComparisonCompleted;
 
-    public void Begin(
+    public void BeginArmed(
         RcmPinProfile pin,
         RcmElectricalTestState state,
-        DateTimeOffset captureStart)
+        DateTimeOffset armedAt)
     {
         ArgumentNullException.ThrowIfNull(pin);
         if (IsCapturing)
@@ -28,13 +38,18 @@ public sealed class RcmCaptureWindowCoordinator
         if (!pin.Testable)
             throw new InvalidOperationException($"{pin.DisplayKey} is not a voltage-testable input.");
 
-        var evidence = new RcmStateEvidence { CaptureStart = captureStart };
-        SetEvidence(pin, state, evidence);
-        pin.Comparison = new RcmStateComparison();
-        pin.RcmResult = ResultForCapturedStates(pin);
         _activePin = pin;
         _activeState = state;
+        Phase = RcmCapturePhase.ArmedWaitingForFirstFrame;
+        ArmedAt = armedAt;
     }
+
+    // Kept as a source-compatible alias for callers that do not need to name the
+    // two phases. It arms; it does not start the collection window.
+    public void Begin(RcmPinProfile pin, RcmElectricalTestState state, DateTimeOffset armedAt) =>
+        BeginArmed(pin, state, armedAt);
+
+    public DateTimeOffset? ArmedAt { get; private set; }
 
     public bool AddFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
     {
@@ -42,7 +57,26 @@ public sealed class RcmCaptureWindowCoordinator
         if (_activePin is null || _activeState is null)
             return false;
 
-        RcmStateEvidence evidence = GetEvidence(_activePin, _activeState.Value);
+        RcmStateEvidence evidence;
+        if (Phase == RcmCapturePhase.ArmedWaitingForFirstFrame)
+        {
+            // Evidence is replaced only when a genuine complete frame arrives.
+            // Merely arming or timing out must not create test evidence.
+            evidence = new RcmStateEvidence { CaptureStart = timestamp };
+            SetEvidence(_activePin, _activeState.Value, evidence);
+            _activePin.Comparison = new RcmStateComparison();
+            _activePin.RcmResult = ResultForCapturedStates(_activePin);
+            Phase = RcmCapturePhase.CapturingAfterFirstFrame;
+        }
+        else if (Phase == RcmCapturePhase.CapturingAfterFirstFrame)
+        {
+            evidence = GetEvidence(_activePin, _activeState.Value);
+        }
+        else
+        {
+            return false;
+        }
+
         byte[] bytes = frame.GetDataSnapshot();
         evidence.CompleteRawFrames.Add(new RcmRawFrameEvidence
         {
@@ -58,6 +92,8 @@ public sealed class RcmCaptureWindowCoordinator
     {
         if (_activePin is null || _activeState is null)
             throw new InvalidOperationException("No RCM capture window is active.");
+        if (Phase != RcmCapturePhase.CapturingAfterFirstFrame)
+            throw new InvalidOperationException("RCM capture is armed but no complete OTMR live frame has been received.");
 
         RcmPinProfile pin = _activePin;
         RcmElectricalTestState state = _activeState.Value;
@@ -73,9 +109,23 @@ public sealed class RcmCaptureWindowCoordinator
         pin.RcmResult = ResultForCapturedStates(pin);
         _activePin = null;
         _activeState = null;
+        Phase = RcmCapturePhase.Idle;
+        ArmedAt = null;
 
         CaptureCompleted?.Invoke(this, new RcmCaptureCompletedEventArgs(pin, state, evidence));
         return evidence;
+    }
+
+    public bool CancelArmed()
+    {
+        if (Phase != RcmCapturePhase.ArmedWaitingForFirstFrame)
+            return false;
+
+        _activePin = null;
+        _activeState = null;
+        Phase = RcmCapturePhase.Idle;
+        ArmedAt = null;
+        return true;
     }
 
     public void Compare(RcmPinProfile pin, DateTimeOffset comparedAt)

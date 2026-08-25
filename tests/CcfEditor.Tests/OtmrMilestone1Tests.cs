@@ -420,6 +420,7 @@ public sealed class OtmrMilestone1Tests
         using var transport = new FakeTransport();
         using var service = new OtmrLiveService(transport, new OtmrLiveStartTiming(
             TimeSpan.FromSeconds(1),
+            TimeSpan.Zero,
             TimeSpan.FromMilliseconds(1)));
         await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
 
@@ -460,6 +461,7 @@ public sealed class OtmrMilestone1Tests
             "CONNECT:RTS=LOW:DTR=HIGH"
         }, transport.Operations.TakeLast(3));
         Assert.Equal(TimeSpan.FromMilliseconds(17.6), OtmrLiveStartTiming.HardwareDefault.FinalCommandToCloseDelay);
+        Assert.Equal(TimeSpan.FromMilliseconds(80.5), OtmrLiveStartTiming.HardwareDefault.FinalReplyToFinalCommandDelay);
         Assert.Equal(2, transport.ConnectionSettings.Count);
         Assert.False(transport.ConnectionSettings[1].RtsEnable);
         Assert.True(transport.ConnectionSettings[1].DtrEnable);
@@ -481,12 +483,73 @@ public sealed class OtmrMilestone1Tests
             message => Assert.StartsWith("LIVE TRANSITION 7/11: reopen begins", message),
             message => Assert.StartsWith("LIVE TRANSITION: transport reopen returned", message));
 
-        transport.EmitRx(new byte[] { 0xFB, 0xFB, 0x38, 0x4B });
+        transport.EmitRx(new byte[] { 0xFF, 0xD2, 0x0C, 0xFB });
+        Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
+        transport.EmitRx(new byte[] { 0xFB, 0x38, 0x4B });
         transport.EmitRx(new byte[] { 0x38, 0x4A });
         Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
         transport.EmitRx(new byte[] { 0xFF });
         Assert.Equal(OtmrLiveState.LiveActive, service.State);
         Assert.True(service.IsLiveActive);
+        Assert.Contains(service.GetDiagnosticSnapshot(), entry =>
+            entry.Message.StartsWith("LIVE_FRAME_ASSEMBLER_BUFFER", StringComparison.Ordinal));
+        Assert.Contains(service.GetDiagnosticSnapshot(), entry =>
+            entry.Message.StartsWith("LIVE_FRAME_ASSEMBLED", StringComparison.Ordinal) &&
+            entry.Message.Contains("total=1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FinalLiveCommand_WaitsForCapturedPost01_13Interval()
+    {
+        IReadOnlyDictionary<byte, byte[]> replies = LoadCapturedReplies();
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(transport, new OtmrLiveStartTiming(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.Zero));
+        await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+
+        Task start = service.StartLiveAsync(LoadSelectedCcf());
+        await DriveSafeInterrogationAsync(transport, service, replies);
+        await WaitForAsync(() => service.State == OtmrLiveState.WaitingFor01_0D);
+        int expectedTxCount = 13;
+        foreach (byte transaction in new byte[] { 0x0D, 0x0E, 0x0F, 0x10, 0x11 })
+        {
+            transport.EmitRx(replies[transaction]);
+            await WaitForTransmissionCountAsync(transport, ++expectedTxCount);
+        }
+        transport.EmitRx(replies[0x12]);
+        await WaitForAsync(() => service.State == OtmrLiveState.WaitingFor01_13);
+
+        transport.EmitRx(replies[0x13]);
+        await WaitForAsync(() => service.GetDiagnosticSnapshot().Any(entry =>
+            entry.Message.StartsWith("FINAL_0113_TO_0107_WAIT_BEGIN", StringComparison.Ordinal)));
+
+        Assert.DoesNotContain(transport.Transmissions,
+            bytes => bytes.AsSpan().SequenceEqual(OtmrLiveStartProtocol.FinalLiveStart07.Span));
+        await Task.Delay(25);
+        Assert.DoesNotContain(transport.Transmissions,
+            bytes => bytes.AsSpan().SequenceEqual(OtmrLiveStartProtocol.FinalLiveStart07.Span));
+
+        await start;
+        Assert.Equal(OtmrLiveStartProtocol.FinalLiveStart07.ToArray(), transport.Transmissions[^1]);
+        string[] diagnostics = service.GetDiagnosticSnapshot().Select(entry => entry.Message).ToArray();
+        Assert.Contains(diagnostics, message => message.StartsWith("FINAL_0113_COMPLETE", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, message => message.StartsWith("FINAL_0113_TO_0107_WAIT_BEGIN", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, message => message.StartsWith("FINAL_0113_TO_0107_WAIT_END", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, message => message.StartsWith("FINAL_0107_TX_BEGIN", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void StartTiming_SeparatesCapturedPostReplyAndPostCommandIntervals()
+    {
+        OtmrLiveStartTiming hardware = OtmrLiveStartTiming.HardwareDefault;
+
+        Assert.InRange(hardware.FinalReplyToFinalCommandDelay.TotalMilliseconds, 80.4, 80.6);
+        Assert.Equal(TimeSpan.FromMilliseconds(17.6), hardware.FinalCommandToCloseDelay);
+        Assert.NotEqual(hardware.FinalReplyToFinalCommandDelay, hardware.FinalCommandToCloseDelay);
+        Assert.Equal(TimeSpan.Zero, FastStartTiming().FinalReplyToFinalCommandDelay);
+        Assert.Equal(TimeSpan.Zero, FastStartTiming().FinalCommandToCloseDelay);
     }
 
     [Fact]
@@ -1160,6 +1223,7 @@ public sealed class OtmrMilestone1Tests
 
     private static OtmrLiveStartTiming FastStartTiming() => new(
         TimeSpan.FromSeconds(1),
+        TimeSpan.Zero,
         TimeSpan.Zero);
 
     private static OtmrLiveRestoreTiming FastRestoreTiming() => new(

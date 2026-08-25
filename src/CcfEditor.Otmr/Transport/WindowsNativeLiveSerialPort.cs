@@ -23,15 +23,12 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
 
     private readonly SafeFileHandle _handle;
     private readonly FileStream _stream;
+    private readonly WindowsNativeOverlappedReadOperation _readOperation;
+    private readonly NativeOverlappedReadPump _readPump;
     private readonly CancellationTokenSource _readCancellation = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly TaskCompletionSource _firstReadSubmitted =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Action<string, string> _diagnostic;
-    private readonly Action<byte[]> _received;
-    private readonly Action<Exception> _error;
     private readonly Task _readLoop;
-    private int _firstRxReported;
     private int _disposed;
 
     private WindowsNativeLiveSerialPort(
@@ -44,12 +41,23 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
         _handle = handle;
         _stream = stream;
         _diagnostic = diagnostic;
-        _received = received;
-        _error = error;
-        _readLoop = ReadLoopAsync(_readCancellation.Token);
+        _readOperation = new WindowsNativeOverlappedReadOperation(handle);
+        _readPump = new NativeOverlappedReadPump(_readOperation, diagnostic, received, error);
+        _readLoop = _readPump.RunAsync(_readCancellation.Token);
     }
 
     public bool IsOpen => Volatile.Read(ref _disposed) == 0 && !_handle.IsInvalid && !_handle.IsClosed;
+
+    internal NativeLiveReceiveStatistics GetReceiveStatistics() => _readPump.GetStatistics();
+
+    internal string QueryReceiveQueue()
+    {
+        if (!IsOpen)
+            return "native live port is closed";
+        if (!NativeMethods.ClearCommError(_handle, out uint errors, out NativeComStat status))
+            return $"ClearCommError failed with Win32 error {Marshal.GetLastWin32Error()}";
+        return $"driverRxQueue={status.BytesInInputQueue}; driverTxQueue={status.BytesInOutputQueue}; commErrors=0x{errors:X8}";
+    }
 
     public static async Task<WindowsNativeLiveSerialPort> OpenAsync(
         OtmrSerialSettings settings,
@@ -86,8 +94,16 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
             ConfigureAndVerify(handle, settings, diagnostic);
             var stream = new FileStream(handle, FileAccess.ReadWrite, 4096, isAsync: true);
             var port = new WindowsNativeLiveSerialPort(handle, stream, diagnostic, received, error);
-            await port._firstReadSubmitted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            return port;
+            try
+            {
+                await port._readPump.FirstReadSubmitted.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return port;
+            }
+            catch
+            {
+                await port.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
         catch
         {
@@ -116,13 +132,15 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        _diagnostic("NATIVE_READ_CANCEL_BEGIN", "CancelIoEx for the outstanding overlapped ReadFile");
+        _diagnostic("NATIVE_READ_CANCEL", "CancelIoEx requested for the outstanding overlapped ReadFile");
         _readCancellation.Cancel();
-        if (!NativeMethods.CancelIoEx(_handle, IntPtr.Zero))
+        try
         {
-            int error = Marshal.GetLastWin32Error();
-            if (error != 1168) // ERROR_NOT_FOUND: no pending I/O remains.
-                _diagnostic("NATIVE_READ_CANCEL_RESULT", $"CancelIoEx error {error}");
+            _readOperation.Cancel();
+        }
+        catch (Exception ex)
+        {
+            _diagnostic("NATIVE_READ_ERROR", "CancelIoEx failed: " + ex.Message);
         }
         try
         {
@@ -132,39 +150,147 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
         {
         }
         _diagnostic("NATIVE_READ_LOOP_STOPPED", "No read operation remains pending");
+        _readOperation.Dispose();
         await _stream.DisposeAsync().ConfigureAwait(false);
         _readCancellation.Dispose();
         _writeLock.Dispose();
         _diagnostic("NATIVE_HANDLE_CLOSED", "Orderly FileStream/SafeFileHandle close completed");
     }
 
-    private async Task ReadLoopAsync(CancellationToken cancellationToken)
+    private sealed class WindowsNativeOverlappedReadOperation : INativeOverlappedReadOperation
     {
-        byte[] buffer = new byte[4096];
-        try
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                ValueTask<int> readOperation = _stream.ReadAsync(buffer, cancellationToken);
-                _diagnostic("NATIVE_READFILE_PENDING", "Overlapped ReadFile submitted for 4096 bytes; timeout constant 500 ms");
-                _firstReadSubmitted.TrySetResult();
-                int read = await readOperation.ConfigureAwait(false);
-                if (read == 0)
-                    continue;
+        private const int BufferSize = 4096;
+        private const int ErrorIoPending = 997;
+        private const int ErrorOperationAborted = 995;
+        private const int ErrorNotFound = 1168;
+        private const uint Infinite = 0xFFFFFFFF;
+        private const uint WaitObject0 = 0;
+        private const uint WaitFailed = 0xFFFFFFFF;
 
-                byte[] exact = buffer.AsSpan(0, read).ToArray();
-                if (Interlocked.Exchange(ref _firstRxReported, 1) == 0)
-                    _diagnostic("FIRST_RX_BYTE", $"0x{exact[0]:X2}; native ReadFile returned {read} byte(s)");
-                _received(exact);
+        private readonly SafeFileHandle _handle;
+        private readonly byte[] _buffer = new byte[BufferSize];
+        private readonly GCHandle _pinnedBuffer;
+        private readonly SafeWaitHandle _completionEvent;
+        private readonly IntPtr _overlapped;
+        private int _pending;
+        private int _disposed;
+
+        internal WindowsNativeOverlappedReadOperation(SafeFileHandle handle)
+        {
+            _handle = handle;
+            _pinnedBuffer = GCHandle.Alloc(_buffer, GCHandleType.Pinned);
+            _completionEvent = NativeMethods.CreateEvent(
+                IntPtr.Zero, manualReset: true, initialState: false, name: null);
+            if (_completionEvent.IsInvalid)
+            {
+                int error = Marshal.GetLastWin32Error();
+                _completionEvent.Dispose();
+                _pinnedBuffer.Free();
+                throw new Win32Exception(error, "CreateEvent for native serial ReadFile failed.");
             }
+
+            _overlapped = Marshal.AllocHGlobal(Marshal.SizeOf<NativeOverlappedData>());
+            InitializeOverlapped();
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+        public NativeReadSubmission Submit()
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (Volatile.Read(ref _pending) != 0)
+                throw new InvalidOperationException("A native serial ReadFile is already pending.");
+
+            Check(NativeMethods.ResetEvent(_completionEvent), "ResetEvent(ReadFile)");
+            InitializeOverlapped();
+            bool completed = NativeMethods.ReadFile(
+                _handle,
+                _pinnedBuffer.AddrOfPinnedObject(),
+                BufferSize,
+                out uint bytesTransferred,
+                _overlapped);
+            if (completed)
+                return NativeReadSubmission.Completed(bytesTransferred);
+
+            int error = Marshal.GetLastWin32Error();
+            if (error != ErrorIoPending)
+                throw new Win32Exception(error, "Native serial ReadFile submission failed.");
+
+            Volatile.Write(ref _pending, 1);
+            return NativeReadSubmission.Pending;
         }
-        catch (Exception ex) when (Volatile.Read(ref _disposed) == 0)
+
+        public uint WaitForPendingCompletion()
         {
-            _firstReadSubmitted.TrySetException(ex);
-            _error(ex);
+            if (Volatile.Read(ref _pending) == 0)
+                throw new InvalidOperationException("No native serial ReadFile is pending.");
+
+            uint waitResult = NativeMethods.WaitForSingleObject(_completionEvent, Infinite);
+            if (waitResult != WaitObject0)
+            {
+                int error = waitResult == WaitFailed ? Marshal.GetLastWin32Error() : unchecked((int)waitResult);
+                Volatile.Write(ref _pending, 0);
+                throw new Win32Exception(error, $"Waiting for native serial ReadFile failed (wait result 0x{waitResult:X8}).");
+            }
+
+            bool completed = NativeMethods.GetOverlappedResult(
+                _handle, _overlapped, out uint bytesTransferred, wait: false);
+            Volatile.Write(ref _pending, 0);
+            if (completed)
+                return bytesTransferred;
+
+            int completionError = Marshal.GetLastWin32Error();
+            if (completionError == ErrorOperationAborted)
+            {
+                throw new OperationCanceledException(
+                    "Native serial ReadFile was cancelled by CancelIoEx.",
+                    new Win32Exception(completionError));
+            }
+            throw new Win32Exception(completionError, "GetOverlappedResult for native serial ReadFile failed.");
+        }
+
+        public byte[] CopyBytes(uint bytesTransferred)
+        {
+            if (bytesTransferred > BufferSize)
+                throw new InvalidDataException($"Native serial ReadFile returned impossible length {bytesTransferred}.");
+            return _buffer.AsSpan(0, checked((int)bytesTransferred)).ToArray();
+        }
+
+        public void Cancel()
+        {
+            if (Volatile.Read(ref _pending) == 0 || Volatile.Read(ref _disposed) != 0)
+                return;
+            if (NativeMethods.CancelIoEx(_handle, _overlapped))
+                return;
+
+            int error = Marshal.GetLastWin32Error();
+            if (error != ErrorNotFound)
+                throw new Win32Exception(error, "CancelIoEx for native serial ReadFile failed.");
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            if (Volatile.Read(ref _pending) != 0)
+                throw new InvalidOperationException("Cannot free the native serial RX buffer while ReadFile is pending.");
+
+            Marshal.FreeHGlobal(_overlapped);
+            _completionEvent.Dispose();
+            _pinnedBuffer.Free();
+        }
+
+        private void InitializeOverlapped()
+        {
+            // FileStream remains attached to this handle for the existing TX
+            // path and may bind it to the CLR completion port. Windows defines
+            // the low bit of OVERLAPPED.hEvent as "do not post to the completion
+            // port"; the real event is still signalled and waited below. This
+            // keeps the direct ReadFile OVERLAPPED owned solely by this reader.
+            IntPtr eventWithoutCompletionPort = new(
+                _completionEvent.DangerousGetHandle().ToInt64() | 1L);
+            Marshal.StructureToPtr(
+                new NativeOverlappedData { EventHandle = eventWithoutCompletionPort },
+                _overlapped,
+                fDeleteOld: false);
         }
     }
 
@@ -205,6 +331,7 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
         Check(NativeMethods.SetCommTimeouts(handle, ref timeouts), "SetCommTimeouts");
         diagnostic("NATIVE_TIMEOUTS_APPLIED", WindowsNativeSerialConfiguration.FormatTimeouts(timeouts));
 
+        diagnostic("NATIVE_VERIFICATION_BEGIN", "Beginning post-configuration read-back verification IOCTLs");
         var actualDcb = new NativeDcb { DcbLength = checked((uint)Marshal.SizeOf<NativeDcb>()) };
         Check(NativeMethods.GetCommState(handle, ref actualDcb), "GetCommState(verify)");
         WindowsNativeSerialConfiguration.VerifyDcb(actualDcb, settings);
@@ -223,6 +350,7 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
         Check(NativeMethods.GetCommTimeouts(handle, out NativeCommTimeouts actualTimeouts), "GetCommTimeouts(verify)");
         WindowsNativeSerialConfiguration.VerifyTimeouts(actualTimeouts);
         diagnostic("NATIVE_TIMEOUTS_VERIFIED", WindowsNativeSerialConfiguration.FormatTimeouts(actualTimeouts));
+        diagnostic("NATIVE_VERIFICATION_COMPLETE", "Post-configuration read-back verification completed");
         diagnostic("NATIVE_REOPEN_CONFIGURATION_COMPLETE", "38400/8N1; RTS LOW; DTR HIGH; exact DCB; 4096/4096 requested; purge complete; exact 500 ms timeouts");
     }
 
@@ -345,7 +473,23 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool ClearCommError(
+            SafeFileHandle file,
+            out uint errors,
+            out NativeComStat status);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool CancelIoEx(SafeFileHandle file, IntPtr overlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool ReadFile(
+            SafeFileHandle file,
+            IntPtr buffer,
+            uint bytesToRead,
+            out uint bytesRead,
+            IntPtr overlapped);
 
         [DllImport("kernel32.dll", EntryPoint = "DeviceIoControl", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -365,11 +509,200 @@ internal sealed class WindowsNativeLiveSerialPort : IAsyncDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool ResetEvent(SafeWaitHandle handle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetOverlappedResult(
             SafeFileHandle file, IntPtr overlapped, out uint bytesTransferred,
             [MarshalAs(UnmanagedType.Bool)] bool wait);
     }
 }
+
+internal readonly record struct NativeReadSubmission(bool IsPending, uint BytesTransferred)
+{
+    internal static NativeReadSubmission Pending { get; } = new(true, 0);
+    internal static NativeReadSubmission Completed(uint bytesTransferred) => new(false, bytesTransferred);
+}
+
+internal interface INativeOverlappedReadOperation : IDisposable
+{
+    NativeReadSubmission Submit();
+    uint WaitForPendingCompletion();
+    byte[] CopyBytes(uint bytesTransferred);
+    void Cancel();
+}
+
+internal sealed class NativeOverlappedReadPump
+{
+    private static readonly TimeSpan DetailedZeroDiagnosticWindow = TimeSpan.FromSeconds(5);
+
+    private readonly INativeOverlappedReadOperation _operation;
+    private readonly Action<string, string> _diagnostic;
+    private readonly Action<byte[]> _received;
+    private readonly Action<Exception> _error;
+    private readonly TaskCompletionSource _firstReadSubmitted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly long _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+    private int _firstRxReported;
+    private long _readSubmissions;
+    private long _zeroByteCompletions;
+    private long _bytesReceived;
+    private long _firstNonZeroReadTimestamp;
+
+    internal NativeOverlappedReadPump(
+        INativeOverlappedReadOperation operation,
+        Action<string, string> diagnostic,
+        Action<byte[]> received,
+        Action<Exception> error)
+    {
+        _operation = operation;
+        _diagnostic = diagnostic;
+        _received = received;
+        _error = error;
+    }
+
+    internal Task FirstReadSubmitted => _firstReadSubmitted.Task;
+
+    internal NativeLiveReceiveStatistics GetStatistics() => new(
+        Interlocked.Read(ref _readSubmissions),
+        Interlocked.Read(ref _zeroByteCompletions),
+        Interlocked.Read(ref _bytesReceived),
+        Interlocked.Read(ref _firstNonZeroReadTimestamp));
+
+    internal Task RunAsync(CancellationToken cancellationToken) =>
+        Task.Run(() => Run(cancellationToken), CancellationToken.None);
+
+    private void Run(CancellationToken cancellationToken)
+    {
+        bool readPending = false;
+        try
+        {
+            long submittedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            NativeReadSubmission submission = _operation.Submit();
+            readPending = submission.IsPending;
+            ReportSubmission(submission, submittedAt);
+
+            while (true)
+            {
+                uint bytesTransferred;
+                if (submission.IsPending)
+                {
+                    try
+                    {
+                        bytesTransferred = _operation.WaitForPendingCompletion();
+                    }
+                    finally
+                    {
+                        readPending = false;
+                    }
+                }
+                else
+                {
+                    bytesTransferred = submission.BytesTransferred;
+                }
+
+                TimeSpan elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(submittedAt);
+                byte[] exact = _operation.CopyBytes(bytesTransferred);
+                string endpoints = bytesTransferred == 0
+                    ? string.Empty
+                    : $"; first=0x{exact[0]:X2}; last=0x{exact[^1]:X2}";
+                if (bytesTransferred == 0)
+                    Interlocked.Increment(ref _zeroByteCompletions);
+                else
+                {
+                    Interlocked.Add(ref _bytesReceived, bytesTransferred);
+                    Interlocked.CompareExchange(
+                        ref _firstNonZeroReadTimestamp,
+                        System.Diagnostics.Stopwatch.GetTimestamp(),
+                        0);
+                }
+
+                bool reportCompletion = bytesTransferred > 0 ||
+                    System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt) <= DetailedZeroDiagnosticWindow;
+                if (reportCompletion)
+                {
+                    string completionDetail =
+                        $"bytesTransferred={bytesTransferred}{endpoints}; elapsed={elapsed.TotalMilliseconds:F4} ms";
+                    _diagnostic("NATIVE_READFILE_RETURNED", completionDetail);
+                    _diagnostic("NATIVE_READ_COMPLETE", completionDetail);
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                // The completed data is now independent of the pinned native
+                // buffer. Rearm ReadFile before invoking capture/SQLite event
+                // handlers so another read remains outstanding during them.
+                long nextSubmittedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+                NativeReadSubmission nextSubmission = _operation.Submit();
+                readPending = nextSubmission.IsPending;
+                _diagnostic("NATIVE_READ_REARM", "Next ReadFile submitted before forwarding the completed RX chunk");
+                ReportSubmission(nextSubmission, nextSubmittedAt);
+
+                if (bytesTransferred > 0)
+                {
+                    string chunkDetail = exact.Length <= 64
+                        ? $"bytes={exact.Length}; hex={string.Join(' ', exact.Select(value => value.ToString("X2")))}"
+                        : $"bytes={exact.Length}; first=0x{exact[0]:X2}; last=0x{exact[^1]:X2}";
+                    _diagnostic("NATIVE_RX_CHUNK", chunkDetail);
+                    if (Interlocked.Exchange(ref _firstRxReported, 1) == 0)
+                        _diagnostic("FIRST_RX_BYTE", $"0x{exact[0]:X2}; direct native ReadFile returned {bytesTransferred} byte(s)");
+                    _received(exact);
+                }
+
+                submission = nextSubmission;
+                submittedAt = nextSubmittedAt;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _diagnostic("NATIVE_READ_CANCEL", "Outstanding ReadFile completed with ERROR_OPERATION_ABORTED");
+        }
+        catch (Exception ex)
+        {
+            if (readPending)
+            {
+                try
+                {
+                    _operation.Cancel();
+                    _operation.WaitForPendingCompletion();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception cancellationError)
+                {
+                    _diagnostic("NATIVE_READ_ERROR", "Failed to drain errored ReadFile: " + cancellationError.Message);
+                }
+            }
+            _firstReadSubmitted.TrySetException(ex);
+            _diagnostic("NATIVE_READ_ERROR", ex.Message);
+            _error(ex);
+        }
+    }
+
+    private void ReportSubmission(NativeReadSubmission submission, long submittedAt)
+    {
+        Interlocked.Increment(ref _readSubmissions);
+        _diagnostic(
+            "NATIVE_READ_SUBMIT",
+            $"ReadFile submitted for 4096 bytes; stopwatch={submittedAt}; " +
+            $"completion={(submission.IsPending ? "pending" : "immediate")}");
+        if (submission.IsPending)
+        {
+            _diagnostic("NATIVE_READ_PENDING", "ReadFile returned ERROR_IO_PENDING");
+            _diagnostic("NATIVE_READFILE_PENDING", "ReadFile returned ERROR_IO_PENDING");
+        }
+        _firstReadSubmitted.TrySetResult();
+    }
+}
+
+internal readonly record struct NativeLiveReceiveStatistics(
+    long ReadSubmissions,
+    long ZeroByteCompletions,
+    long BytesReceived,
+    long FirstNonZeroReadTimestamp);
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct NativeDcb
@@ -399,6 +732,14 @@ internal struct NativeCommTimeouts
     internal uint ReadTotalTimeoutConstant;
     internal uint WriteTotalTimeoutMultiplier;
     internal uint WriteTotalTimeoutConstant;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeComStat
+{
+    internal uint Flags;
+    internal uint BytesInInputQueue;
+    internal uint BytesInOutputQueue;
 }
 
 [StructLayout(LayoutKind.Sequential)]
