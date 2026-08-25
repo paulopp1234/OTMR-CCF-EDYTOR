@@ -128,6 +128,18 @@ public sealed class RcmCaptureWindowCoordinator
         return true;
     }
 
+    public bool CancelActive()
+    {
+        if (!IsCapturing)
+            return false;
+
+        _activePin = null;
+        _activeState = null;
+        Phase = RcmCapturePhase.Idle;
+        ArmedAt = null;
+        return true;
+    }
+
     public void Compare(RcmPinProfile pin, DateTimeOffset comparedAt)
     {
         ArgumentNullException.ThrowIfNull(pin);
@@ -146,6 +158,8 @@ public sealed class RcmCaptureWindowCoordinator
         pin.VoltageRemoved = new RcmStateEvidence();
         pin.VoltageApplied24V = new RcmStateEvidence();
         pin.Comparison = new RcmStateComparison();
+        pin.VerificationRuns.Clear();
+        pin.DecoderVerification = new RcmDecoderVerification();
         pin.RcmResult = ResultForCapturedStates(pin);
     }
 

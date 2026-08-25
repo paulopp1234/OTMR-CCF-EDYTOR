@@ -167,6 +167,14 @@ public sealed class MainFormLayoutTests
                     AssertVisibleText(tabs.SelectedTab!, text);
                 Assert.Equal("DISCONNECTED", Find<Label>(form, "liveStateLabel").Text);
                 Assert.False(Find<Button>(form, "startLiveButton").Enabled);
+                OtmrLiveControl liveControl = Find<OtmrLiveControl>(form, "otmrLiveControl");
+                OtmrLiveService liveService = GetPrivateField<OtmrLiveService>(liveControl, "_liveService");
+                InvokePrivate(liveService, "SetState", OtmrLiveState.LiveReady);
+                Application.DoEvents();
+                Assert.Equal("OTMR LIVE READY — waiting for input events", Find<Label>(form, "liveStateLabel").Text);
+                Assert.DoesNotContain("WAITING FOR FB FB", Find<Label>(form, "liveStateLabel").Text,
+                    StringComparison.Ordinal);
+                Assert.True(Find<Button>(form, "stopLiveButton").Enabled);
 
                 tabs.SelectedIndex = 5;
                 Application.DoEvents();
@@ -176,7 +184,7 @@ public sealed class MainFormLayoutTests
                     "Open RCM Profile", "Save RCM Profile", "Save RCM Profile As", "Add Connector",
                     "Rename Connector", "Edit Pin Sequence", "Delete Connector", "Add Input / Pin", "Edit Selected Input",
                     "Assign Next Pin",
-                    "Delete Input / Pin", "Arm Voltage Removed", "Arm +24 V Applied",
+                    "Delete Input / Pin", "START INPUT TEST",
                     "Compare States", "Reset Test Evidence"
                 }) AssertVisibleText(tabs.SelectedTab!, text);
 
@@ -221,8 +229,7 @@ public sealed class MainFormLayoutTests
             Assert.NotEmpty(grid.Rows.Cast<DataGridViewRow>());
             Assert.All(grid.Rows.Cast<DataGridViewRow>(), row =>
                 Assert.Equal(string.Empty, Convert.ToString(row.Cells["pinColumn"].Value)));
-            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.False(Find<Button>(form, "startInputTestButton").Enabled);
 
             OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
             RcmProfile profile = GetPrivateField<RcmProfile>(bench, "_rcmProfile");
@@ -246,20 +253,16 @@ public sealed class MainFormLayoutTests
             Assert.Contains("J1-A", selected.Text, StringComparison.Ordinal);
             Assert.Contains("Throttle 1", selected.Text, StringComparison.Ordinal);
             Assert.Contains("Expected CCF records: 0", selected.Text, StringComparison.Ordinal);
-            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.False(Find<Button>(form, "startInputTestButton").Enabled);
             InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.ConnectedIdle);
             Application.DoEvents();
-            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
-            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.WaitingForLiveFrames);
+            Assert.False(Find<Button>(form, "startInputTestButton").Enabled);
+            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.LiveReady);
             Application.DoEvents();
-            Assert.True(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.True(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.True(Find<Button>(form, "startInputTestButton").Enabled);
             InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.LiveActive);
             Application.DoEvents();
-            Assert.True(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.True(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.True(Find<Button>(form, "startInputTestButton").Enabled);
             Assert.False(Find<Button>(form, "compareStatesButton").Enabled);
 
             DataGridViewRow returnRow = grid.Rows.Cast<DataGridViewRow>()
@@ -268,8 +271,7 @@ public sealed class MainFormLayoutTests
             returnRow.Selected = true;
             Application.DoEvents();
             Assert.Contains("J1-L", selected.Text, StringComparison.Ordinal);
-            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.False(Find<Button>(form, "startInputTestButton").Enabled);
             Assert.Equal("NOT TESTABLE", Convert.ToString(returnRow.Cells["voltageRemovedColumn"].Value));
             Assert.Contains("NOT TESTABLE", Find<TextBox>(form, "evidenceTextBox").Text, StringComparison.Ordinal);
             Assert.Equal(sourceBefore, File.ReadAllBytes(ccfPath));
@@ -277,7 +279,7 @@ public sealed class MainFormLayoutTests
     }
 
     [Fact]
-    public void ArmedBenchAcceptsFirstCompleteFrameWhileLiveSessionIsWaiting()
+    public void GuidedInputTestAcceptsWaitingStateFramesAndAutomaticallyProgressesAndCompares()
     {
         RunInStaThread(() =>
         {
@@ -302,37 +304,88 @@ public sealed class MainFormLayoutTests
             InvokePrivate(bench, "PopulateConnectors");
             Find<ComboBox>(form, "connectorComboBox").SelectedItem = "J1";
             InvokePrivate(bench, "RenderTable", pin.Id);
-            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.WaitingForLiveFrames);
+            InvokePrivate(bench, "SetOtmrLiveState", OtmrLiveState.LiveReady);
             Application.DoEvents();
 
-            Button arm = Find<Button>(form, "captureVoltageRemovedButton");
-            Assert.True(arm.Enabled);
-            arm.PerformClick();
+            Button start = Find<Button>(form, "startInputTestButton");
+            Button cancel = Find<Button>(form, "cancelInputTestButton");
+            Assert.True(start.Enabled);
+            start.PerformClick();
             Application.DoEvents();
 
-            var coordinator = GetPrivateField<RcmCaptureWindowCoordinator>(bench, "_captureCoordinator");
+            var coordinator = GetPrivateField<RcmInputTestCoordinator>(bench, "_inputTestCoordinator");
             var armTimer = GetPrivateField<System.Windows.Forms.Timer>(bench, "armTimeoutTimer");
             var captureTimer = GetPrivateField<System.Windows.Forms.Timer>(bench, "captureWindowTimer");
-            Assert.True(coordinator.IsArmed);
+            Assert.Equal(RcmInputTestState.WaitingFor24VApplied, coordinator.State);
             Assert.True(armTimer.Enabled);
             Assert.False(captureTimer.Enabled);
+            Assert.True(cancel.Visible);
+            Assert.False(start.Visible);
+            Assert.Empty(pin.VoltageApplied24V.CompleteRawFrames);
             Assert.Empty(pin.VoltageRemoved.CompleteRawFrames);
 
-            OtmrLiveFrame frame = Assert.Single(new OtmrLiveFrameAssembler().Append(
+            OtmrLiveFrame applied = Assert.Single(new OtmrLiveFrameAssembler().Append(
                 new byte[] { 0xFB, 0xFB, 0x38, 0x4A, 0xFF }));
-            bench.ReportRawLiveFrame(DateTimeOffset.UtcNow, frame);
+            bench.ReportRawLiveFrame(DateTimeOffset.UtcNow, applied);
             Application.DoEvents();
 
-            Assert.True(coordinator.IsCollecting);
+            Assert.Equal(RcmInputTestState.Capturing24VApplied, coordinator.State);
             Assert.False(armTimer.Enabled);
             Assert.True(captureTimer.Enabled);
-            Assert.Single(pin.VoltageRemoved.CompleteRawFrames);
-            Assert.Contains("RESPONSE DETECTED", Find<Label>(form, "voltageRemovedInstructionLabel").Text,
+            Assert.Single(pin.VoltageApplied24V.CompleteRawFrames);
+            Assert.Empty(pin.VoltageRemoved.CompleteRawFrames);
+            Assert.Contains("+24 V DETECTED", Find<Label>(form, "voltageAppliedInstructionLabel").Text,
                 StringComparison.Ordinal);
 
             InvokePrivate(bench, "CaptureWindowTimer_Tick", null, EventArgs.Empty);
             Application.DoEvents();
+            Assert.Equal(RcmInputTestState.WaitingForVoltageRemoved, coordinator.State);
+            Assert.True(pin.VoltageApplied24V.Tested);
+            Assert.False(pin.VoltageRemoved.Tested);
+            Assert.True(armTimer.Enabled);
+            Assert.False(captureTimer.Enabled);
+            Assert.Contains("NOW REMOVE +24 V", Find<Label>(form, "voltageRemovedInstructionLabel").Text,
+                StringComparison.Ordinal);
+
+            OtmrLiveFrame removed = Assert.Single(new OtmrLiveFrameAssembler().Append(
+                new byte[] { 0xFB, 0xFB, 0x38, 0x19, 0xFF }));
+            bench.ReportRawLiveFrame(DateTimeOffset.UtcNow, removed);
+            Application.DoEvents();
+            Assert.Equal(RcmInputTestState.CapturingVoltageRemoved, coordinator.State);
+            Assert.Single(pin.VoltageRemoved.CompleteRawFrames);
+            Assert.Equal(0x4A, pin.VoltageApplied24V.CompleteRawFrames.Single().RawFrameBytes[3]);
+            Assert.Equal(0x19, pin.VoltageRemoved.CompleteRawFrames.Single().RawFrameBytes[3]);
+
+            InvokePrivate(bench, "CaptureWindowTimer_Tick", null, EventArgs.Empty);
+            Application.DoEvents();
+            Assert.Equal(RcmInputTestState.Complete, coordinator.State);
             Assert.True(pin.VoltageRemoved.Tested);
+            Assert.NotNull(pin.Comparison.ComparedAt);
+            Assert.Equal(RcmResultStates.BothStatesCaptured, pin.RcmResult);
+            Assert.Contains("TEST COMPLETE", Find<Label>(bench, "statusLabel").Text, StringComparison.Ordinal);
+            Assert.Contains("CANDIDATE", Find<Label>(bench, "statusLabel").Text, StringComparison.Ordinal);
+            Assert.Equal("REPEAT INPUT TEST", start.Text);
+            Assert.False(Find<Button>(bench, "verifyMappingButton").Visible);
+
+            for (int run = 2; run <= 3; run++)
+            {
+                DateTimeOffset runStart = DateTimeOffset.UtcNow.AddMinutes(run);
+                var repeated = new RcmInputTestCoordinator(new RcmCaptureWindowCoordinator());
+                repeated.Start(pin, runStart);
+                repeated.AddFrame(runStart.AddSeconds(1), applied);
+                repeated.CompleteCapture(runStart.AddSeconds(3));
+                repeated.AddFrame(runStart.AddSeconds(4), removed);
+                repeated.CompleteCapture(runStart.AddSeconds(6), profile.RequiredVerificationRuns);
+            }
+            InvokePrivate(bench, "RenderTable", pin.Id);
+            Application.DoEvents();
+            Button verify = Find<Button>(bench, "verifyMappingButton");
+            Assert.True(verify.Visible);
+            Assert.True(verify.Enabled);
+            verify.PerformClick();
+            Application.DoEvents();
+            Assert.True(pin.Comparison.DecoderVerified);
+            Assert.Equal(RcmVerificationStates.Verified, pin.DecoderVerification.Status);
         });
     }
 
@@ -533,8 +586,7 @@ public sealed class MainFormLayoutTests
             Assert.Contains("Pin: NOT ASSIGNED", summary.Text, StringComparison.Ordinal);
             Assert.Equal("PHYSICAL MAPPING REQUIRED", removedInstruction.Text);
             Assert.Equal("PHYSICAL MAPPING REQUIRED", appliedInstruction.Text);
-            Assert.False(Find<Button>(form, "captureVoltageRemovedButton").Enabled);
-            Assert.False(Find<Button>(form, "captureVoltageAppliedButton").Enabled);
+            Assert.False(Find<Button>(form, "startInputTestButton").Enabled);
             Assert.False(Find<Button>(form, "compareStatesButton").Enabled);
             Assert.True(Find<Button>(form, "editSelectedWorkflowButton").Enabled);
             Assert.True(evidence.WordWrap);
@@ -549,6 +601,53 @@ public sealed class MainFormLayoutTests
                 $"Smaller grid panel is only {split.Panel1.Width}px wide.");
             Assert.True(summary.Height >= summary.PreferredHeight,
                 $"Selected input summary is clipped: {summary.Height}px versus preferred {summary.PreferredHeight}px.");
+        });
+    }
+
+    [Fact]
+    public void GenuineLiveFrameUpdatesExplicitlyVerifiedSignalInLiveUi()
+    {
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm();
+            form.Show();
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            tabs.SelectedIndex = 4;
+            Application.DoEvents();
+
+            OtmrLiveControl live = Find<OtmrLiveControl>(form, "otmrLiveControl");
+            RcmPinProfile pin = RcmVerifiedLiveDecoderTests.VerifiedPin(
+                "A", position: 3, bit: 0, removed: 0x00, applied: 0x01);
+            RcmProfile profile = RcmVerifiedLiveDecoderTests.Profile(pin);
+            InvokePrivate(live, "SetActiveRcmProfile", profile);
+
+            var assembler = new OtmrLiveFrameAssembler();
+            OtmrLiveFrame activeFrame = Assert.Single(assembler.Append(
+                new byte[] { 0xFB, 0xFB, 0x38, 0x01, 0xFF }));
+            InvokePrivate(live, "LiveService_FrameReceived", null,
+                new OtmrLiveFrameEventArgs(DateTimeOffset.UtcNow, activeFrame));
+            Application.DoEvents();
+
+            DataGridView grid = Find<DataGridView>(live, "decodedSignalsGrid");
+            DataGridViewRow row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+            Assert.Equal("J1-A", Convert.ToString(row.Cells["decodedPhysicalColumn"].Value));
+            Assert.Equal("Throttle 1", Convert.ToString(row.Cells["decodedFunctionColumn"].Value));
+            Assert.Equal("Card 0 / Ch 0", Convert.ToString(row.Cells["decodedLogicalColumn"].Value));
+            Assert.Equal("ACTIVE", Convert.ToString(row.Cells["decodedStateColumn"].Value));
+            Assert.Contains("pos 3 bit 0 = 1", Convert.ToString(row.Cells["decodedRawColumn"].Value),
+                StringComparison.Ordinal);
+            Assert.Equal("VERIFIED", Convert.ToString(row.Cells["decodedVerificationColumn"].Value));
+
+            OtmrLiveFrame inactiveFrame = Assert.Single(assembler.Append(
+                new byte[] { 0xFB, 0xFB, 0x38, 0x00, 0xFF }));
+            InvokePrivate(live, "LiveService_FrameReceived", null,
+                new OtmrLiveFrameEventArgs(DateTimeOffset.UtcNow, inactiveFrame));
+            Application.DoEvents();
+
+            row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+            Assert.Equal("INACTIVE", Convert.ToString(row.Cells["decodedStateColumn"].Value));
+            Assert.Contains("pos 3 bit 0 = 0", Convert.ToString(row.Cells["decodedRawColumn"].Value),
+                StringComparison.Ordinal);
         });
     }
 

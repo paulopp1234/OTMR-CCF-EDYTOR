@@ -37,6 +37,16 @@ partial class OtmrLiveControl
     private Label databaseCountsLabel = null!;
     private Label databasePathLabel = null!;
     private Label databaseMessageLabel = null!;
+    private GroupBox decodedSignalsGroupBox = null!;
+    private TableLayoutPanel decodedSignalsLayout = null!;
+    private Label decodedSignalsStatusLabel = null!;
+    private DataGridView decodedSignalsGrid = null!;
+    private DataGridViewTextBoxColumn decodedPhysicalColumn = null!;
+    private DataGridViewTextBoxColumn decodedFunctionColumn = null!;
+    private DataGridViewTextBoxColumn decodedLogicalColumn = null!;
+    private DataGridViewTextBoxColumn decodedStateColumn = null!;
+    private DataGridViewTextBoxColumn decodedRawColumn = null!;
+    private DataGridViewTextBoxColumn decodedVerificationColumn = null!;
     private GroupBox captureGroupBox = null!;
     private DataGridView captureGrid = null!;
     private DataGridViewTextBoxColumn timeColumn = null!;
@@ -94,6 +104,16 @@ partial class OtmrLiveControl
         databaseCountsLabel = new Label();
         databasePathLabel = new Label();
         databaseMessageLabel = new Label();
+        decodedSignalsGroupBox = new GroupBox();
+        decodedSignalsLayout = new TableLayoutPanel();
+        decodedSignalsStatusLabel = new Label();
+        decodedSignalsGrid = new DataGridView();
+        decodedPhysicalColumn = new DataGridViewTextBoxColumn();
+        decodedFunctionColumn = new DataGridViewTextBoxColumn();
+        decodedLogicalColumn = new DataGridViewTextBoxColumn();
+        decodedStateColumn = new DataGridViewTextBoxColumn();
+        decodedRawColumn = new DataGridViewTextBoxColumn();
+        decodedVerificationColumn = new DataGridViewTextBoxColumn();
         captureGroupBox = new GroupBox();
         captureGrid = new DataGridView();
         timeColumn = new DataGridViewTextBoxColumn();
@@ -114,6 +134,9 @@ partial class OtmrLiveControl
         databaseRecordingGroupBox.SuspendLayout();
         databaseRecordingLayout.SuspendLayout();
         databaseButtonsPanel.SuspendLayout();
+        decodedSignalsGroupBox.SuspendLayout();
+        decodedSignalsLayout.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)decodedSignalsGrid).BeginInit();
         captureGroupBox.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)captureGrid).BeginInit();
         captureButtonsPanel.SuspendLayout();
@@ -125,15 +148,17 @@ partial class OtmrLiveControl
         rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         rootLayout.Controls.Add(connectionGroupBox, 0, 0);
         rootLayout.Controls.Add(databaseRecordingGroupBox, 0, 1);
-        rootLayout.Controls.Add(captureGroupBox, 0, 2);
-        rootLayout.Controls.Add(statusLabel, 0, 3);
+        rootLayout.Controls.Add(decodedSignalsGroupBox, 0, 2);
+        rootLayout.Controls.Add(captureGroupBox, 0, 3);
+        rootLayout.Controls.Add(statusLabel, 0, 4);
         rootLayout.Dock = DockStyle.Fill;
         rootLayout.Location = new Point(0, 0);
         rootLayout.Name = "rootLayout";
         rootLayout.Padding = new Padding(8);
-        rootLayout.RowCount = 4;
+        rootLayout.RowCount = 5;
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 170F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 170F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
         rootLayout.Size = new Size(1200, 700);
@@ -255,7 +280,7 @@ partial class OtmrLiveControl
         connectionLayout.SetColumnSpan(safetyLabel, 10);
         safetyLabel.Dock = DockStyle.Fill;
         safetyLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        safetyLabel.Text = "BENCH VALIDATION: START requires the selected Class 171 CCF and complete proven preflight. Stop Live only closes COM; Stop + Restore separately writes the frozen pre-START configuration. LiveActive still requires a complete FB FB ... FF frame.";
+        safetyLabel.Text = "BENCH VALIDATION: START requires the selected Class 171 CCF and complete proven preflight. Stop Live only closes COM; Stop + Restore separately writes the frozen pre-START configuration. OTMR Live Ready means START completed and native receive is armed; Live Stream Active follows the first genuine frame.";
         safetyLabel.TextAlign = ContentAlignment.MiddleLeft;
         // 
         // databaseRecordingGroupBox
@@ -330,6 +355,60 @@ partial class OtmrLiveControl
         databaseMessageLabel.Name = "databaseMessageLabel";
         databaseMessageLabel.Text = "Stopped. Start Recording before the OTMR sequence if you want every TX/RX byte retained.";
         databaseMessageLabel.TextAlign = ContentAlignment.MiddleRight;
+        //
+        // decoded verified RCM signals
+        //
+        decodedSignalsGroupBox.Controls.Add(decodedSignalsLayout);
+        decodedSignalsGroupBox.Dock = DockStyle.Fill;
+        decodedSignalsGroupBox.Name = "decodedSignalsGroupBox";
+        decodedSignalsGroupBox.Padding = new Padding(8);
+        decodedSignalsGroupBox.Text = "Verified RCM decoded live signals";
+        decodedSignalsLayout.ColumnCount = 1;
+        decodedSignalsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        decodedSignalsLayout.Controls.Add(decodedSignalsStatusLabel, 0, 0);
+        decodedSignalsLayout.Controls.Add(decodedSignalsGrid, 0, 1);
+        decodedSignalsLayout.Dock = DockStyle.Fill;
+        decodedSignalsLayout.Name = "decodedSignalsLayout";
+        decodedSignalsLayout.RowCount = 2;
+        decodedSignalsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25F));
+        decodedSignalsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        decodedSignalsStatusLabel.Dock = DockStyle.Fill;
+        decodedSignalsStatusLabel.Name = "decodedSignalsStatusLabel";
+        decodedSignalsStatusLabel.Text = "No verified RCM mappings available for decoded live signals.";
+        decodedSignalsStatusLabel.TextAlign = ContentAlignment.MiddleLeft;
+        decodedSignalsGrid.AllowUserToAddRows = false;
+        decodedSignalsGrid.AllowUserToDeleteRows = false;
+        decodedSignalsGrid.AutoGenerateColumns = false;
+        decodedSignalsGrid.BackgroundColor = SystemColors.Window;
+        decodedSignalsGrid.Columns.AddRange(new DataGridViewColumn[]
+        {
+            decodedPhysicalColumn, decodedFunctionColumn, decodedLogicalColumn,
+            decodedStateColumn, decodedRawColumn, decodedVerificationColumn
+        });
+        decodedSignalsGrid.Dock = DockStyle.Fill;
+        decodedSignalsGrid.MultiSelect = false;
+        decodedSignalsGrid.Name = "decodedSignalsGrid";
+        decodedSignalsGrid.ReadOnly = true;
+        decodedSignalsGrid.RowHeadersVisible = false;
+        decodedSignalsGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        decodedPhysicalColumn.HeaderText = "Physical";
+        decodedPhysicalColumn.Name = "decodedPhysicalColumn";
+        decodedPhysicalColumn.Width = 90;
+        decodedFunctionColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+        decodedFunctionColumn.HeaderText = "Function";
+        decodedFunctionColumn.Name = "decodedFunctionColumn";
+        decodedLogicalColumn.HeaderText = "Logical";
+        decodedLogicalColumn.Name = "decodedLogicalColumn";
+        decodedLogicalColumn.Width = 125;
+        decodedStateColumn.HeaderText = "State";
+        decodedStateColumn.Name = "decodedStateColumn";
+        decodedStateColumn.Width = 105;
+        decodedRawColumn.HeaderText = "Raw";
+        decodedRawColumn.Name = "decodedRawColumn";
+        decodedRawColumn.Width = 230;
+        decodedVerificationColumn.HeaderText = "Verification";
+        decodedVerificationColumn.Name = "decodedVerificationColumn";
+        decodedVerificationColumn.Width = 100;
         // 
         // captureGroupBox
         // 
@@ -433,6 +512,10 @@ partial class OtmrLiveControl
         databaseRecordingLayout.ResumeLayout(true);
         databaseRecordingLayout.PerformLayout();
         databaseRecordingGroupBox.ResumeLayout(true);
+        ((System.ComponentModel.ISupportInitialize)decodedSignalsGrid).EndInit();
+        decodedSignalsLayout.ResumeLayout(true);
+        decodedSignalsLayout.PerformLayout();
+        decodedSignalsGroupBox.ResumeLayout(true);
         ((System.ComponentModel.ISupportInitialize)captureGrid).EndInit();
         captureButtonsPanel.ResumeLayout(true);
         captureButtonsPanel.PerformLayout();

@@ -1,5 +1,6 @@
 using CcfEditor.Core;
 using CcfEditor.Otmr.Live;
+using CcfEditor.Otmr.Rcm;
 
 namespace CcfEditor.WinForms;
 
@@ -12,4 +13,7 @@ public partial class MainForm
 
     internal void ReportOtmrLiveState(OtmrLiveState state) =>
         otmrBenchControl.SetOtmrLiveState(state);
+
+    internal void ReportActiveRcmProfileChanged(RcmProfile? profile) =>
+        otmrLiveControl.SetActiveRcmProfile(profile);
 }

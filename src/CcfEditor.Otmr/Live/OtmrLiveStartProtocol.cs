@@ -27,6 +27,7 @@ public enum OtmrLiveState
     WaitingFor01_13,
     StartingLive,
     WaitingForLiveFrames,
+    LiveReady,
     LiveActive,
     NotLive,
     RestoringOriginalConfiguration,
@@ -35,6 +36,9 @@ public enum OtmrLiveState
 
 public static class OtmrLiveStartProtocol
 {
+    public static bool CanReceiveLiveFrames(OtmrLiveState state) =>
+        state is OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.LiveReady or OtmrLiveState.LiveActive;
+
     // Every TX frame below is copied byte-for-byte from an Analyser.exe Write
     // Request in HHD_Serial_Trace_20260824_143201.txt. No command is generated
     // by extrapolating the transaction number.

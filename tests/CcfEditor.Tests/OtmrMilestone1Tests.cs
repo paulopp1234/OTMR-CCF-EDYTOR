@@ -465,8 +465,12 @@ public sealed class OtmrMilestone1Tests
         Assert.Equal(2, transport.ConnectionSettings.Count);
         Assert.False(transport.ConnectionSettings[1].RtsEnable);
         Assert.True(transport.ConnectionSettings[1].DtrEnable);
-        Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
+        Assert.Equal(OtmrLiveState.LiveReady, service.State);
         Assert.False(service.IsLiveActive);
+        Assert.True(service.IsLiveReady);
+        Assert.Equal(0, service.CompleteLiveFrameCount);
+        var deliveredFrames = new List<OtmrLiveFrame>();
+        service.FrameReceived += (_, e) => deliveredFrames.Add(e.Frame);
 
         string[] transitionDiagnostics = service.GetDiagnosticSnapshot()
             .Select(entry => entry.Message)
@@ -484,13 +488,17 @@ public sealed class OtmrMilestone1Tests
             message => Assert.StartsWith("LIVE TRANSITION: transport reopen returned", message));
 
         transport.EmitRx(new byte[] { 0xFF, 0xD2, 0x0C, 0xFB });
-        Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
+        Assert.Equal(OtmrLiveState.LiveReady, service.State);
         transport.EmitRx(new byte[] { 0xFB, 0x38, 0x4B });
         transport.EmitRx(new byte[] { 0x38, 0x4A });
-        Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
+        Assert.Equal(OtmrLiveState.LiveReady, service.State);
         transport.EmitRx(new byte[] { 0xFF });
         Assert.Equal(OtmrLiveState.LiveActive, service.State);
         Assert.True(service.IsLiveActive);
+        Assert.Equal(1, service.CompleteLiveFrameCount);
+        Assert.Single(deliveredFrames);
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x38, 0x4B, 0x38, 0x4A, 0xFF },
+            deliveredFrames[0].GetDataSnapshot());
         Assert.Contains(service.GetDiagnosticSnapshot(), entry =>
             entry.Message.StartsWith("LIVE_FRAME_ASSEMBLER_BUFFER", StringComparison.Ordinal));
         Assert.Contains(service.GetDiagnosticSnapshot(), entry =>
@@ -640,6 +648,29 @@ public sealed class OtmrMilestone1Tests
         Assert.False(transport.IsConnected);
         Assert.Contains("RESTORE final 01 07", service.GetCaptureSnapshot().Last(entry =>
             entry.Direction == OtmrDirection.Tx).Interpretation ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task StopLiveFromLiveReadyClosesPortWithoutInventingTx()
+    {
+        IReadOnlyDictionary<byte, byte[]> replies = LoadCapturedReplies();
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(transport, FastStartTiming());
+        await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+
+        Task start = service.StartLiveAsync(LoadSelectedCcf());
+        await DriveSafeInterrogationAsync(transport, service, replies);
+        await DriveGeneratedReplyStagesAsync(transport, service, replies, start);
+        Assert.Equal(OtmrLiveState.LiveReady, service.State);
+        Assert.Equal(0, service.CompleteLiveFrameCount);
+
+        int transmissions = transport.Transmissions.Count;
+        await service.StopLiveAsync();
+
+        Assert.Equal(transmissions, transport.Transmissions.Count);
+        Assert.Equal(OtmrLiveState.NotLive, service.State);
+        Assert.False(transport.IsConnected);
+        Assert.Equal("DISCONNECT", transport.Operations[^1]);
     }
 
     [Fact]

@@ -62,6 +62,8 @@ public sealed class OtmrLiveService : IDisposable
 
     public bool IsConnected => _transport.IsConnected;
     public bool IsLiveActive => State == OtmrLiveState.LiveActive;
+    public bool IsLiveReady => State == OtmrLiveState.LiveReady;
+    public long CompleteLiveFrameCount => Interlocked.Read(ref _completeLiveFrameCount);
     public OtmrLiveState State
     {
         get
@@ -411,6 +413,8 @@ public sealed class OtmrLiveService : IDisposable
         ReportHighResolutionDiagnostic("LIVE TRANSITION 7/11: reopen begins");
         await _transport.ConnectAsync(liveSettings, cancellationToken).ConfigureAwait(false);
         ReportHighResolutionDiagnostic("LIVE TRANSITION: transport reopen returned");
+        if (State == OtmrLiveState.WaitingForLiveFrames)
+            SetState(OtmrLiveState.LiveReady);
         ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(true, liveSettings.PortName));
         StartLiveReceiveWatchdog();
     }
@@ -421,8 +425,8 @@ public sealed class OtmrLiveService : IDisposable
         await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (State is not (OtmrLiveState.LiveActive or OtmrLiveState.WaitingForLiveFrames))
-                throw new InvalidOperationException("Stop Live is available only while live output is active or awaiting its first frame.");
+            if (State is not (OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames))
+                throw new InvalidOperationException("Stop Live is available only while live receive is ready or active.");
             await StopLiveCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -437,7 +441,7 @@ public sealed class OtmrLiveService : IDisposable
         await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (State is OtmrLiveState.LiveActive or OtmrLiveState.WaitingForLiveFrames)
+            if (State is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames)
                 await StopLiveCoreAsync(cancellationToken).ConfigureAwait(false);
             if (State != OtmrLiveState.NotLive || _settings is null)
                 throw new InvalidOperationException("Stop + Restore requires a stopped live session with retained serial settings.");
@@ -679,7 +683,7 @@ public sealed class OtmrLiveService : IDisposable
                 : $"{protocolFrames.Count} complete OTMR protocol frames assembled";
         AddCapture(new OtmrCaptureEntry(timestamp, OtmrDirection.Rx, e.Data, interpretation));
 
-        bool liveReceptionState = State is OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.LiveActive;
+        bool liveReceptionState = OtmrLiveStartProtocol.CanReceiveLiveFrames(State);
         if (liveReceptionState && liveFrames.Count == 0)
         {
             ReportHighResolutionDiagnostic(
@@ -691,7 +695,7 @@ public sealed class OtmrLiveService : IDisposable
             long totalFrames = Interlocked.Increment(ref _completeLiveFrameCount);
             ReportHighResolutionDiagnostic(
                 $"LIVE_FRAME_ASSEMBLED | length={frame.Length} | total={totalFrames} | hex={frame.Hex}");
-            if (State == OtmrLiveState.WaitingForLiveFrames)
+            if (State is OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.LiveReady)
                 SetState(OtmrLiveState.LiveActive);
             _recordingStore?.TryRecordLiveFrame(timestamp, frame);
             FrameReceived?.Invoke(this, new OtmrLiveFrameEventArgs(timestamp, frame));
@@ -843,7 +847,7 @@ public sealed class OtmrLiveService : IDisposable
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token).ConfigureAwait(false);
-            if (State != OtmrLiveState.WaitingForLiveFrames || _serialTransport is null)
+            if (State != OtmrLiveState.LiveReady || _serialTransport is null)
                 return;
             if (!_serialTransport.TryGetNativeLiveReceiveStatus(out NativeLiveReceiveStatistics statistics, out string queueStatus) ||
                 statistics.BytesReceived > 0)

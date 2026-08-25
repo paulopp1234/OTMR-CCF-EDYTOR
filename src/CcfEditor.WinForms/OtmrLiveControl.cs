@@ -1,6 +1,7 @@
 using CcfEditor.Core;
 using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
+using CcfEditor.Otmr.Rcm;
 using CcfEditor.Otmr.Transport;
 
 namespace CcfEditor.WinForms;
@@ -15,6 +16,9 @@ public partial class OtmrLiveControl : UserControl
     private string? _connectedPortName;
     private int _assembledFrameCount;
     private CcfDocument? _selectedCcf;
+    private readonly RcmVerifiedLiveDecoder _verifiedLiveDecoder = new();
+    private RcmProfile? _activeRcmProfile;
+    private IReadOnlyList<RcmVerifiedLiveSignal> _decodedSignals = Array.Empty<RcmVerifiedLiveSignal>();
 
     internal OtmrLiveState State => _liveService.State;
 
@@ -41,6 +45,16 @@ public partial class OtmrLiveControl : UserControl
         _selectedCcf = document;
         UpdateStateUi();
     }
+
+    internal void SetActiveRcmProfile(RcmProfile? profile)
+    {
+        _activeRcmProfile = profile;
+        _decodedSignals = Array.Empty<RcmVerifiedLiveSignal>();
+        RefreshDecodedSignalsGrid();
+    }
+
+    internal IReadOnlyList<RcmVerifiedLiveSignal> GetDecodedSignalSnapshot() =>
+        _decodedSignals.ToArray();
 
     private void RefreshPortsButton_Click(object? sender, EventArgs e) => RefreshPorts();
 
@@ -347,6 +361,8 @@ public partial class OtmrLiveControl : UserControl
         void ReportFrame()
         {
             _assembledFrameCount++;
+            _decodedSignals = _verifiedLiveDecoder.Decode(e.Frame, _activeRcmProfile);
+            RefreshDecodedSignalsGrid();
             statusLabel.Text =
                 $"Complete RX frame #{_assembledFrameCount}: {e.Frame.Length} bytes | {e.Frame.Hex}";
             (FindForm() as MainForm)?.ReportOtmrLiveFrame(e.Timestamp, e.Frame);
@@ -368,6 +384,51 @@ public partial class OtmrLiveControl : UserControl
             BeginInvoke((Action)Update);
         else
             Update();
+    }
+
+    private void RefreshDecodedSignalsGrid()
+    {
+        if (decodedSignalsGrid is null || decodedSignalsStatusLabel is null)
+            return;
+
+        decodedSignalsGrid.Rows.Clear();
+        foreach (RcmVerifiedLiveSignal signal in _decodedSignals)
+        {
+            string physical = $"{signal.Connector}-{signal.Pin}";
+            string logical = signal.LogicalCard.HasValue && signal.LogicalChannel.HasValue
+                ? $"Card {signal.LogicalCard} / Ch {signal.LogicalChannel}"
+                : "—";
+            string state = signal.State switch
+            {
+                RcmDecodedElectricalState.Active => "ACTIVE",
+                RcmDecodedElectricalState.Inactive => "INACTIVE",
+                _ => "UNKNOWN"
+            };
+            string raw = signal.RawObservedValue.HasValue
+                ? signal.BitIndex.HasValue
+                    ? $"pos {signal.RawPosition} bit {signal.BitIndex} = {signal.ObservedBitValue} (raw {signal.RawObservedValue:X2})"
+                    : $"pos {signal.RawPosition} = {signal.RawObservedValue:X2}"
+                : signal.Detail;
+            int rowIndex = decodedSignalsGrid.Rows.Add(
+                physical,
+                signal.Function,
+                logical,
+                state,
+                raw,
+                "VERIFIED");
+            DataGridViewRow row = decodedSignalsGrid.Rows[rowIndex];
+            row.DefaultCellStyle.ForeColor = signal.State switch
+            {
+                RcmDecodedElectricalState.Active => Color.DarkGreen,
+                RcmDecodedElectricalState.Inactive => SystemColors.ControlText,
+                _ => Color.DarkRed
+            };
+            row.Cells[decodedRawColumn.Index].ToolTipText = signal.Detail;
+        }
+
+        decodedSignalsStatusLabel.Text = _decodedSignals.Count == 0
+            ? "No verified RCM mappings available for decoded live signals."
+            : $"Decoded {_decodedSignals.Count} explicitly verified RCM mapping(s) from the latest genuine live frame.";
     }
 
     private void LiveService_DiagnosticAdded(object? sender, OtmrProtocolDiagnosticEventArgs e)
@@ -441,8 +502,8 @@ public partial class OtmrLiveControl : UserControl
         bool hasPort = portComboBox.SelectedItem is string;
         connectButton.Enabled = !_busy && disconnected && hasPort;
         startLiveButton.Enabled = !_busy && state == OtmrLiveState.ConnectedIdle && _selectedCcf is not null;
-        stopLiveButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.WaitingForLiveFrames;
-        stopRestoreButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.NotLive;
+        stopLiveButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames;
+        stopRestoreButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.NotLive;
         disconnectButton.Enabled = !_busy && state != OtmrLiveState.Disconnected;
         portComboBox.Enabled = !_busy && disconnected;
         refreshPortsButton.Enabled = !_busy && disconnected;
@@ -459,8 +520,9 @@ public partial class OtmrLiveControl : UserControl
             >= OtmrLiveState.WaitingFor01_0D and <= OtmrLiveState.WaitingFor01_13 =>
                 ($"GENERATED CONFIGURATION EXCHANGE — {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)}", Color.DarkOrange),
             OtmrLiveState.StartingLive => ("STARTING LIVE — CAPTURED FINAL COMMAND SENT", Color.DarkOrange),
-            OtmrLiveState.WaitingForLiveFrames => ("WAITING FOR FB FB … FF LIVE FRAMES", Color.DarkOrange),
-            OtmrLiveState.LiveActive => ("LIVE STREAM ACTIVE", Color.DarkGreen),
+            OtmrLiveState.WaitingForLiveFrames => ("ARMING NATIVE LIVE RECEIVE", Color.DarkOrange),
+            OtmrLiveState.LiveReady => ("OTMR LIVE READY — waiting for input events", Color.DarkGreen),
+            OtmrLiveState.LiveActive => ("OTMR LIVE STREAM ACTIVE", Color.DarkGreen),
             OtmrLiveState.Error => ("ERROR — LIVE STREAM NOT ACTIVE", Color.DarkRed),
             OtmrLiveState.NotLive => ("NOT LIVE - COM CLOSED", Color.DimGray),
             OtmrLiveState.RestoringOriginalConfiguration => ("RESTORING FROZEN PRE-START CONFIGURATION", Color.DarkOrange),
@@ -482,8 +544,9 @@ public partial class OtmrLiveControl : UserControl
             >= OtmrLiveState.WaitingFor01_0D and <= OtmrLiveState.WaitingFor01_13 =>
                 $"Generated write accepted; waiting for the complete expected {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)} reply before advancing.",
             OtmrLiveState.StartingLive => "Captured final 01 07 sent after complete 01 13; closing after the observed ~17.6 ms interval.",
-            OtmrLiveState.WaitingForLiveFrames => $"{port} reopened immediately at 38400/8/N/1, RTS LOW, DTR HIGH; waiting for a complete FB FB … FF frame.",
-            OtmrLiveState.LiveActive => "LIVE STREAM ACTIVE — complete FB FB … FF traffic detected. Raw frames only; meanings are not inferred.",
+            OtmrLiveState.WaitingForLiveFrames => $"{port} native live receive is being armed.",
+            OtmrLiveState.LiveReady => "OTMR Live Ready means the Class 171 START sequence completed and the native receive port is armed. Live Stream Active is shown after the first genuine realtime frame is received.",
+            OtmrLiveState.LiveActive => "OTMR LIVE STREAM ACTIVE — genuine complete FB FB … FF traffic detected. Raw frames only; meanings are not inferred.",
             OtmrLiveState.Error => "Live-start error. Stop / Disconnect before retrying.",
             OtmrLiveState.NotLive => "Realtime stopped by closing COM. No stop command was sent. Use Stop + Restore for the separate captured restoration exchange.",
             OtmrLiveState.RestoringOriginalConfiguration => "Running the captured cleanup/restoration sequence from the frozen pre-START recorder snapshot.",
