@@ -11,6 +11,7 @@ namespace CcfEditor.Otmr.Live;
 public sealed class OtmrLiveService : IDisposable
 {
     private readonly IOtmrTransport _transport;
+    private readonly SerialOtmrTransport? _serialTransport;
     private readonly object _captureSync = new();
     private readonly object _diagnosticSync = new();
     private readonly object _txInterpretationSync = new();
@@ -44,11 +45,14 @@ public sealed class OtmrLiveService : IDisposable
         OtmrLiveRestoreTiming? restoreTiming)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _serialTransport = transport as SerialOtmrTransport;
         _startTiming = startTiming ?? OtmrLiveStartTiming.HardwareDefault;
         _restoreTiming = restoreTiming ?? OtmrLiveRestoreTiming.HardwareDefault;
         _transport.BytesReceived += Transport_BytesReceived;
         _transport.BytesTransmitted += Transport_BytesTransmitted;
         _transport.ErrorOccurred += Transport_ErrorOccurred;
+        if (_serialTransport is not null)
+            _serialTransport.DiagnosticOccurred += SerialTransport_DiagnosticOccurred;
     }
 
     public bool IsConnected => _transport.IsConnected;
@@ -346,12 +350,22 @@ public sealed class OtmrLiveService : IDisposable
     private async Task PerformFinalLiveTransitionAsync(CancellationToken cancellationToken)
     {
         SetState(OtmrLiveState.StartingLive);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION 1/11: final 01 07 write begins");
         await _transport.SendAsync(OtmrLiveStartProtocol.FinalLiveStart07, cancellationToken).ConfigureAwait(false);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION 2/11: final 01 07 write returned");
 
         if (_startTiming.FinalCommandToCloseDelay > TimeSpan.Zero)
+        {
+            ReportHighResolutionDiagnostic(
+                $"LIVE TRANSITION 3/11: {_startTiming.FinalCommandToCloseDelay.TotalMilliseconds:F4} ms delay begins");
             await Task.Delay(_startTiming.FinalCommandToCloseDelay, cancellationToken).ConfigureAwait(false);
+            ReportHighResolutionDiagnostic(
+                $"LIVE TRANSITION 4/11: {_startTiming.FinalCommandToCloseDelay.TotalMilliseconds:F4} ms delay ends");
+        }
 
+        ReportHighResolutionDiagnostic("LIVE TRANSITION: transport disconnect begins");
         await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION: transport disconnect returned");
         ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(false, null));
 
         ResetDetection();
@@ -359,7 +373,9 @@ public sealed class OtmrLiveService : IDisposable
         // Arm recognition before opening; the first complete frame may arrive
         // immediately during the DTR-HIGH reopen callback.
         SetState(OtmrLiveState.WaitingForLiveFrames);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION 7/11: reopen begins");
         await _transport.ConnectAsync(liveSettings, cancellationToken).ConfigureAwait(false);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION: transport reopen returned");
         ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(true, liveSettings.PortName));
     }
 
@@ -418,12 +434,13 @@ public sealed class OtmrLiveService : IDisposable
             const string finalRestoreInterpretation =
                 "RESTORE final 01 07 after exact complete 01 13; captured cleanup close follows";
             ReportDiagnostic(finalRestoreInterpretation);
+            long finalRestoreStarted = Stopwatch.GetTimestamp();
             await SendWithInterpretationAsync(
                 OtmrLiveStartProtocol.FinalLiveStart07,
                 finalRestoreInterpretation,
                 cancellationToken).ConfigureAwait(false);
             if (_restoreTiming.FinalCommandToCloseDelay > TimeSpan.Zero)
-                await Task.Delay(_restoreTiming.FinalCommandToCloseDelay, cancellationToken).ConfigureAwait(false);
+                WaitUntilElapsed(finalRestoreStarted, _restoreTiming.FinalCommandToCloseDelay, cancellationToken);
             await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
             ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(false, null));
             ResetDetection();
@@ -513,6 +530,18 @@ public sealed class OtmrLiveService : IDisposable
     private static IReadOnlyDictionary<byte, byte[]> FreezeRecorderPages(
         IReadOnlyDictionary<byte, byte[]> pages) =>
         pages.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
+
+    private static void WaitUntilElapsed(long started, TimeSpan targetElapsed, CancellationToken cancellationToken)
+    {
+        // The captured STOP interval is only 4.5618 ms. Windows Task.Delay
+        // commonly rounds this to a 15.6 ms scheduler tick, so measure from
+        // the write start and use a bounded spin for this one short transition.
+        while (Stopwatch.GetElapsedTime(started) < targetElapsed)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Thread.SpinWait(64);
+        }
+    }
 
     private static void ValidateGeneratedExchange(
         OtmrGeneratedConfigurationExchange exchange,
@@ -636,6 +665,17 @@ public sealed class OtmrLiveService : IDisposable
         DiagnosticAdded?.Invoke(this, new OtmrProtocolDiagnosticEventArgs(entry));
     }
 
+    private void ReportHighResolutionDiagnostic(string message)
+    {
+        long timestamp = Stopwatch.GetTimestamp();
+        ReportDiagnostic($"{message} | stopwatch={timestamp} | frequency={Stopwatch.Frequency}");
+    }
+
+    private void SerialTransport_DiagnosticOccurred(object? sender, OtmrTransportDiagnosticEventArgs e) =>
+        ReportDiagnostic(
+            $"TRANSPORT {e.Stage}: {e.Detail} | wall={e.Timestamp:O} | " +
+            $"stopwatch={e.StopwatchTimestamp} | frequency={e.StopwatchFrequency}");
+
     private void AddCapture(OtmrCaptureEntry entry)
     {
         lock (_captureSync)
@@ -702,6 +742,8 @@ public sealed class OtmrLiveService : IDisposable
         _transport.BytesReceived -= Transport_BytesReceived;
         _transport.BytesTransmitted -= Transport_BytesTransmitted;
         _transport.ErrorOccurred -= Transport_ErrorOccurred;
+        if (_serialTransport is not null)
+            _serialTransport.DiagnosticOccurred -= SerialTransport_DiagnosticOccurred;
         _transport.Dispose();
         _disposed = true;
     }

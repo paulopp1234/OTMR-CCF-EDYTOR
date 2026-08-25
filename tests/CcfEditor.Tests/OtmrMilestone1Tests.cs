@@ -418,7 +418,9 @@ public sealed class OtmrMilestone1Tests
     {
         IReadOnlyDictionary<byte, byte[]> replies = LoadCapturedReplies();
         using var transport = new FakeTransport();
-        using var service = new OtmrLiveService(transport, FastStartTiming());
+        using var service = new OtmrLiveService(transport, new OtmrLiveStartTiming(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(1)));
         await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
 
         Task start = service.StartLiveAsync(LoadSelectedCcf());
@@ -463,6 +465,21 @@ public sealed class OtmrMilestone1Tests
         Assert.True(transport.ConnectionSettings[1].DtrEnable);
         Assert.Equal(OtmrLiveState.WaitingForLiveFrames, service.State);
         Assert.False(service.IsLiveActive);
+
+        string[] transitionDiagnostics = service.GetDiagnosticSnapshot()
+            .Select(entry => entry.Message)
+            .Where(message => message.StartsWith("LIVE TRANSITION", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Collection(
+            transitionDiagnostics,
+            message => Assert.StartsWith("LIVE TRANSITION 1/11: final 01 07 write begins", message),
+            message => Assert.StartsWith("LIVE TRANSITION 2/11: final 01 07 write returned", message),
+            message => Assert.StartsWith("LIVE TRANSITION 3/11: 1.0000 ms delay begins", message),
+            message => Assert.StartsWith("LIVE TRANSITION 4/11: 1.0000 ms delay ends", message),
+            message => Assert.StartsWith("LIVE TRANSITION: transport disconnect begins", message),
+            message => Assert.StartsWith("LIVE TRANSITION: transport disconnect returned", message),
+            message => Assert.StartsWith("LIVE TRANSITION 7/11: reopen begins", message),
+            message => Assert.StartsWith("LIVE TRANSITION: transport reopen returned", message));
 
         transport.EmitRx(new byte[] { 0xFB, 0xFB, 0x38, 0x4B });
         transport.EmitRx(new byte[] { 0x38, 0x4A });
