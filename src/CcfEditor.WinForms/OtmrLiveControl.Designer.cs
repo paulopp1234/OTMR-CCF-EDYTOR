@@ -21,6 +21,8 @@ partial class OtmrLiveControl
     private TextBox stopBitsTextBox = null!;
     private Button connectButton = null!;
     private Button startLiveButton = null!;
+    private Button stopLiveButton = null!;
+    private Button stopRestoreButton = null!;
     private Button disconnectButton = null!;
     private Label liveStateLabel = null!;
     private Label safetyLabel = null!;
@@ -76,6 +78,8 @@ partial class OtmrLiveControl
         stopBitsTextBox = new TextBox();
         connectButton = new Button();
         startLiveButton = new Button();
+        stopLiveButton = new Button();
+        stopRestoreButton = new Button();
         disconnectButton = new Button();
         liveStateLabel = new Label();
         safetyLabel = new Label();
@@ -167,8 +171,10 @@ partial class OtmrLiveControl
         connectionLayout.Controls.Add(stopBitsTextBox, 6, 1);
         connectionLayout.Controls.Add(connectButton, 7, 0);
         connectionLayout.Controls.Add(startLiveButton, 8, 0);
+        connectionLayout.Controls.Add(stopLiveButton, 7, 1);
+        connectionLayout.Controls.Add(stopRestoreButton, 8, 1);
         connectionLayout.Controls.Add(liveStateLabel, 0, 1);
-        connectionLayout.Controls.Add(disconnectButton, 7, 1);
+        connectionLayout.Controls.Add(disconnectButton, 9, 1);
         connectionLayout.Controls.Add(safetyLabel, 0, 2);
         connectionLayout.Dock = DockStyle.Fill;
         connectionLayout.Name = "connectionLayout";
@@ -223,6 +229,16 @@ partial class OtmrLiveControl
         startLiveButton.Name = "startLiveButton";
         startLiveButton.Text = "Start OTMR Live";
         startLiveButton.Click += StartLiveButton_Click;
+        stopLiveButton.Dock = DockStyle.Fill;
+        stopLiveButton.Enabled = false;
+        stopLiveButton.Name = "stopLiveButton";
+        stopLiveButton.Text = "Stop Live";
+        stopLiveButton.Click += StopLiveButton_Click;
+        stopRestoreButton.Dock = DockStyle.Fill;
+        stopRestoreButton.Enabled = false;
+        stopRestoreButton.Name = "stopRestoreButton";
+        stopRestoreButton.Text = "Stop + Restore";
+        stopRestoreButton.Click += StopRestoreButton_Click;
         liveStateLabel.AutoSize = true;
         connectionLayout.SetColumnSpan(liveStateLabel, 3);
         liveStateLabel.Dock = DockStyle.Fill;
@@ -233,14 +249,13 @@ partial class OtmrLiveControl
         disconnectButton.Dock = DockStyle.Fill;
         disconnectButton.Enabled = false;
         disconnectButton.Name = "disconnectButton";
-        connectionLayout.SetColumnSpan(disconnectButton, 2);
-        disconnectButton.Text = "Stop / Disconnect";
+        disconnectButton.Text = "Disconnect";
         disconnectButton.Click += DisconnectButton_Click;
         safetyLabel.AutoSize = true;
         connectionLayout.SetColumnSpan(safetyLabel, 10);
         safetyLabel.Dock = DockStyle.Fill;
         safetyLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        safetyLabel.Text = "SAFETY: Connect sends nothing. Start OTMR Live is an explicit confirmed action using the proven 01 01 query and evidence-backed CANDIDATE 01 07 Arrowvale sequence. No CCF, captured 0x10B configuration block, programming data, replay, or unknown command is transmitted.";
+        safetyLabel.Text = "BENCH VALIDATION: START requires the selected Class 171 CCF and complete proven preflight. Stop Live only closes COM; Stop + Restore separately writes the frozen pre-START configuration. LiveActive still requires a complete FB FB ... FF frame.";
         safetyLabel.TextAlign = ContentAlignment.MiddleLeft;
         // 
         // databaseRecordingGroupBox

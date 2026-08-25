@@ -1,3 +1,4 @@
+using CcfEditor.Core;
 using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
 using CcfEditor.Otmr.Transport;
@@ -13,6 +14,7 @@ public partial class OtmrLiveControl : UserControl
     private CancellationTokenSource? _startCancellation;
     private string? _connectedPortName;
     private int _assembledFrameCount;
+    private CcfDocument? _selectedCcf;
 
     internal OtmrLiveState State => _liveService.State;
 
@@ -27,10 +29,17 @@ public partial class OtmrLiveControl : UserControl
         _liveService.ConnectionChanged += LiveService_ConnectionChanged;
         _liveService.ErrorOccurred += LiveService_ErrorOccurred;
         _liveService.StateChanged += LiveService_StateChanged;
+        _liveService.DiagnosticAdded += LiveService_DiagnosticAdded;
 
         RefreshPorts();
         UpdateStateUi();
         RefreshCaptureGrid();
+    }
+
+    internal void SetCurrentCcf(CcfDocument? document)
+    {
+        _selectedCcf = document;
+        UpdateStateUi();
     }
 
     private void RefreshPortsButton_Click(object? sender, EventArgs e) => RefreshPorts();
@@ -94,14 +103,22 @@ public partial class OtmrLiveControl : UserControl
 
     private async void StartLiveButton_Click(object? sender, EventArgs e)
     {
+        if (_selectedCcf is null)
+        {
+            MessageBox.Show(this, "Open and explicitly select a Class 171 CCF before starting live output.",
+                "OTMR START preflight", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         const string confirmation =
             "Start the Class 171 OTMR real-time output sequence?\r\n\r\n" +
-            "This uses the observed Arrowvale live-start sequence.\r\n" +
-            "No CCF/configuration blocks will be transmitted.";
+            "CONTROLLED BENCH VALIDATION: this interrogates the recorder, validates the selected CCF, " +
+            "freezes its original pages, then sends the seven proven generated writes.\r\n\r\n" +
+            "Live status still requires a complete FB FB ... FF frame.";
         if (MessageBox.Show(
                 this,
                 confirmation,
-                "Start OTMR Live — evidence-backed candidate",
+                "Start OTMR Live — captured interrogation",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2) != DialogResult.Yes)
@@ -112,7 +129,7 @@ public partial class OtmrLiveControl : UserControl
         SetBusy(true);
         try
         {
-            await _liveService.StartLiveAsync(_startCancellation.Token);
+            await _liveService.StartLiveAsync(_selectedCcf, _startCancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -122,6 +139,47 @@ public partial class OtmrLiveControl : UserControl
         {
             statusLabel.Text = $"Live start failed: {ex.Message}";
             MessageBox.Show(this, ex.Message, "Unable to start OTMR live output", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void StopLiveButton_Click(object? sender, EventArgs e)
+    {
+        SetBusy(true);
+        try
+        {
+            await _liveService.StopLiveAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Unable to stop OTMR realtime", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void StopRestoreButton_Click(object? sender, EventArgs e)
+    {
+        const string confirmation =
+            "Stop realtime and perform the captured full restoration exchange using the frozen pre-START recorder values?\r\n\r\n" +
+            "This is separate from Stop Live, which only closes the live COM port.";
+        if (MessageBox.Show(this, confirmation, "Stop + Restore original OTMR configuration",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
+
+        SetBusy(true);
+        try
+        {
+            await _liveService.StopAndRestoreAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Unable to restore OTMR configuration", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -312,6 +370,18 @@ public partial class OtmrLiveControl : UserControl
             Update();
     }
 
+    private void LiveService_DiagnosticAdded(object? sender, OtmrProtocolDiagnosticEventArgs e)
+    {
+        if (_closing || IsDisposed)
+            return;
+
+        void Update() => statusLabel.Text = e.Entry.Message;
+        if (InvokeRequired)
+            BeginInvoke((Action)Update);
+        else
+            Update();
+    }
+
     private void RefreshCaptureGrid()
     {
         if (_closing || IsDisposed)
@@ -370,8 +440,10 @@ public partial class OtmrLiveControl : UserControl
         bool disconnected = state == OtmrLiveState.Disconnected;
         bool hasPort = portComboBox.SelectedItem is string;
         connectButton.Enabled = !_busy && disconnected && hasPort;
-        startLiveButton.Enabled = !_busy && state == OtmrLiveState.ConnectedIdle;
-        disconnectButton.Enabled = state != OtmrLiveState.Disconnected;
+        startLiveButton.Enabled = !_busy && state == OtmrLiveState.ConnectedIdle && _selectedCcf is not null;
+        stopLiveButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.WaitingForLiveFrames;
+        stopRestoreButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.NotLive;
+        disconnectButton.Enabled = !_busy && state != OtmrLiveState.Disconnected;
         portComboBox.Enabled = !_busy && disconnected;
         refreshPortsButton.Enabled = !_busy && disconnected;
 
@@ -379,12 +451,19 @@ public partial class OtmrLiveControl : UserControl
         {
             OtmrLiveState.Disconnected => ("DISCONNECTED", Color.DimGray),
             OtmrLiveState.ConnectedIdle => ("CONNECTED — IDLE (NO LIVE STREAM)", Color.DarkOrange),
-            OtmrLiveState.QuerySent => ("QUERY SENT — WAITING FOR OTMR REPLY", Color.DarkOrange),
-            OtmrLiveState.OtmrReplied => ("OTMR REPLIED", Color.DarkGreen),
-            OtmrLiveState.StartingLive => ("STARTING LIVE — CANDIDATE COMMAND SENT", Color.DarkOrange),
+            OtmrLiveState.PreflightingConfiguration => ("VALIDATING GENERATED CONFIGURATION EXCHANGE", Color.DarkOrange),
+            >= OtmrLiveState.WaitingFor01_01 and <= OtmrLiveState.WaitingFor01_0C =>
+                ($"INTERROGATING — {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)}", Color.DarkOrange),
+            OtmrLiveState.RecorderConfigurationWriteBlocked =>
+                ("STOPPED — RECORDER CONFIGURATION WRITE SAFETY BOUNDARY", Color.DarkRed),
+            >= OtmrLiveState.WaitingFor01_0D and <= OtmrLiveState.WaitingFor01_13 =>
+                ($"GENERATED CONFIGURATION EXCHANGE — {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)}", Color.DarkOrange),
+            OtmrLiveState.StartingLive => ("STARTING LIVE — CAPTURED FINAL COMMAND SENT", Color.DarkOrange),
             OtmrLiveState.WaitingForLiveFrames => ("WAITING FOR FB FB … FF LIVE FRAMES", Color.DarkOrange),
             OtmrLiveState.LiveActive => ("LIVE STREAM ACTIVE", Color.DarkGreen),
             OtmrLiveState.Error => ("ERROR — LIVE STREAM NOT ACTIVE", Color.DarkRed),
+            OtmrLiveState.NotLive => ("NOT LIVE - COM CLOSED", Color.DimGray),
+            OtmrLiveState.RestoringOriginalConfiguration => ("RESTORING FROZEN PRE-START CONFIGURATION", Color.DarkOrange),
             _ => (state.ToString(), SystemColors.ControlText)
         };
         liveStateLabel.Text = text;
@@ -395,12 +474,19 @@ public partial class OtmrLiveControl : UserControl
         {
             OtmrLiveState.Disconnected => "Disconnected. Connect opens 38400/8/N/1 with RTS LOW and DTR LOW; it sends nothing.",
             OtmrLiveState.ConnectedIdle => $"{port} open at 38400/8/N/1, RTS LOW, DTR LOW. Click Start OTMR Live to send the controlled sequence.",
-            OtmrLiveState.QuerySent => "Proven 01 01 query transmitted; waiting for the expected OTMR reply.",
-            OtmrLiveState.OtmrReplied => "OTMR REPLIED. Proceeding with the confirmed operator-requested candidate live-start operation.",
-            OtmrLiveState.StartingLive => "Candidate 01 07 live-start frame transmitted; performing the observed controlled close/reopen.",
-            OtmrLiveState.WaitingForLiveFrames => $"{port} reopened at 38400/8/N/1, RTS LOW, DTR HIGH; waiting for a complete FB FB … FF frame.",
+            OtmrLiveState.PreflightingConfiguration => "Validating selected CCF compatibility, frozen recorder pages, generated lengths/checks, and complete byte provenance.",
+            >= OtmrLiveState.WaitingFor01_01 and <= OtmrLiveState.WaitingFor01_0C =>
+                $"Captured read/interrogation stage {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)}; waiting for its complete reply/data frame.",
+            OtmrLiveState.RecorderConfigurationWriteBlocked =>
+                "Configuration preflight failed. No generated configuration write or final live-start command was transmitted; see the precise error message.",
+            >= OtmrLiveState.WaitingFor01_0D and <= OtmrLiveState.WaitingFor01_13 =>
+                $"Generated write accepted; waiting for the complete expected {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)} reply before advancing.",
+            OtmrLiveState.StartingLive => "Captured final 01 07 sent after complete 01 13; closing after the observed ~17.6 ms interval.",
+            OtmrLiveState.WaitingForLiveFrames => $"{port} reopened immediately at 38400/8/N/1, RTS LOW, DTR HIGH; waiting for a complete FB FB … FF frame.",
             OtmrLiveState.LiveActive => "LIVE STREAM ACTIVE — complete FB FB … FF traffic detected. Raw frames only; meanings are not inferred.",
-            OtmrLiveState.Error => "Live-start error. No CCF or configuration block was transmitted. Stop / Disconnect before retrying.",
+            OtmrLiveState.Error => "Live-start error. Stop / Disconnect before retrying.",
+            OtmrLiveState.NotLive => "Realtime stopped by closing COM. No stop command was sent. Use Stop + Restore for the separate captured restoration exchange.",
+            OtmrLiveState.RestoringOriginalConfiguration => "Running the captured cleanup/restoration sequence from the frozen pre-START recorder snapshot.",
             _ => state.ToString()
         };
     }
@@ -419,6 +505,7 @@ public partial class OtmrLiveControl : UserControl
         _liveService.ConnectionChanged -= LiveService_ConnectionChanged;
         _liveService.ErrorOccurred -= LiveService_ErrorOccurred;
         _liveService.StateChanged -= LiveService_StateChanged;
+        _liveService.DiagnosticAdded -= LiveService_DiagnosticAdded;
         _startCancellation?.Cancel();
         _startCancellation?.Dispose();
         _liveService.Dispose();

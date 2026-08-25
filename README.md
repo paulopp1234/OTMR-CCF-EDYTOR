@@ -2,6 +2,13 @@
 
 Current released application revision: **v0.2**.
 
+> Controlled Class 171 bench validation update (2026-08-25): the application
+> now has an explicit selected-CCF preflight and a reply-gated, byte-proven live
+> START sequence. **Stop Live** is close-only; **Stop + Restore** is a separate
+> captured cleanup/restoration exchange based on frozen pre-START recorder data.
+> This does not claim successful validation on physical OTMR hardware. See
+> `docs/CLASS171_OTMR_CONTROLLED_BENCH_INTEGRATION_20260825.md`.
+
 ## `test` branch — OTMR Live Milestone 1
 
 The `test` branch adds the first OTMR serial module without changing the existing CCF editor design or file-handling rules.

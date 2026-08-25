@@ -163,7 +163,7 @@ public sealed class MainFormLayoutTests
                 tabs.SelectedIndex = 4;
                 Application.DoEvents();
                 foreach (string text in new[]
-                         { "Refresh Ports", "38400", "8", "None", "1", "Connect", "Start OTMR Live", "Stop / Disconnect", "Clear", "Save Capture", "Copy Hex" })
+                         { "Refresh Ports", "38400", "8", "None", "1", "Connect", "Start OTMR Live", "Stop Live", "Stop + Restore", "Disconnect", "Clear", "Save Capture", "Copy Hex" })
                     AssertVisibleText(tabs.SelectedTab!, text);
                 Assert.Equal("DISCONNECTED", Find<Label>(form, "liveStateLabel").Text);
                 Assert.False(Find<Button>(form, "startLiveButton").Enabled);

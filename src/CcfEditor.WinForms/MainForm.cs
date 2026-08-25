@@ -25,6 +25,7 @@ public partial class MainForm : Form
         recordsGrid.DataSource = _recordsBinding;
         headerGrid.DataSource = _headerBinding;
         hexGrid.DataSource = _hexBinding;
+        otmrLiveControl.SetCurrentCcf(_document);
         otmrBenchControl.SetCurrentCcf(_document);
     }
 
@@ -368,6 +369,7 @@ public partial class MainForm : Form
         // The bench owns no independent CCF lifecycle. Push the host's current
         // document after every load/edit refresh so its status and profile
         // creation source cannot lag behind MainForm.
+        otmrLiveControl.SetCurrentCcf(_document);
         otmrBenchControl.SetCurrentCcf(_document);
     }
 
