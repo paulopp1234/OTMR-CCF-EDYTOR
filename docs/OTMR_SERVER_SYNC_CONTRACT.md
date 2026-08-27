@@ -1,6 +1,6 @@
 # OTMR server synchronization contract
 
-Status: **authoritative API v1 contract** for the Windows uploader and the future DigitalOcean server.
+Status: **authoritative API v1 contract** shared by the Windows uploader and the ASP.NET Core DigitalOcean server.
 
 The Windows and server applications use SQLite with the same OTMR domain semantics:
 
@@ -13,6 +13,7 @@ SQLite files, WAL files, and SHM files are never copied between machines. Comple
 
 - HTTP contract: `apiVersion = 1`
 - Windows SQLite schema: `PRAGMA user_version = 2`
+- Server SQLite schema: `PRAGMA user_version = 1`
 - Atomic upload endpoint: `POST /api/v1/otmr/recording-sessions`
 - Content type: `application/json; charset=utf-8`
 - Idempotency header: `Idempotency-Key: <sessionId in UUID D format>`
@@ -73,6 +74,8 @@ Existing fields are `outbox_id`, `session_id`, `entity_type`, `state`, `created_
 - `lease_expires_utc TEXT NULL`
 
 The outbox is local delivery bookkeeping and is not uploaded as OTMR evidence.
+
+The server mirrors the seven semantic evidence tables and their stable keys without the client-only outbox. Its server-only `server_upload_receipts` table has `session_id` as its primary key and stores `api_version`, `manifest_sha256`, `received_utc`, and all six manifest counts. The receipt has a restrictive foreign key to `recording_sessions` and commits in the same transaction as the uploaded evidence.
 
 ## 3. Persisted synchronization lifecycle
 
@@ -350,29 +353,30 @@ The server must:
 
 Decoder corrections create versioned derived views. They never mutate the captured bytes. Candidate/unverified/conflicted RCM mappings must not be presented as verified decoded states.
 
-## 11. Required future read endpoints
+## 11. Implemented server read endpoints
 
-The DigitalOcean server must later provide authenticated, paginated endpoints for:
+The ASP.NET Core server provides authenticated, bounded endpoints for:
 
-- `GET /api/v1/otmr/vehicles`
-- `GET /api/v1/otmr/vehicles/{vehicleId}/signals/latest`
-- `GET /api/v1/otmr/vehicles/{vehicleId}/recording-sessions?fromUtc=&toUtc=&cursor=&limit=`
-- `GET /api/v1/otmr/vehicles/{vehicleId}/signal-data?fromUtc=&toUtc=&cursor=&limit=`
-- `GET /api/v1/otmr/vehicles/{vehicleId}/rcm-configuration/current`
+- `GET /api/v1/otmr/vehicles?limit=...`
+- `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/sessions?offset=...&limit=...`
+- `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/records?fromUtc=...&toUtc=...&limit=...`
+- `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/configuration`
+- `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/live`
 
-Only explicitly verified, non-conflicted mappings may appear as decoded live signals. Each decoded value retains its source session/frame, raw position/bit/value, verification status, and decoder version. The MAUI project is not in this repository, so its concrete read DTOs still require review before those endpoints are frozen.
+The records endpoint returns permanently stored complete live-frame evidence in a required, bounded UTC range. All SQL values are parameterized and server-configured result limits are enforced. The live endpoint deliberately returns `liveAvailable: false` and no signals: completed-session synchronization is historical evidence, not realtime telemetry. Only explicitly verified, non-conflicted mappings may appear in any future decoded live API. The external MAUI project's final read DTOs still require joint review.
 
-## 12. Remaining server-start blockers
+## 12. Implemented server acceptance rules and remaining deployment work
 
-The Windows client contract/uploader foundation is implemented, but server work must still address:
+The .NET 8 server reuses this shared DTO assembly and canonical hash implementation. It validates API version, session identity, collection identities, all six counts, complete live/capture frame boundaries, and the manifest hash before persistence. A new upload inserts all seven semantic evidence collections and `server_upload_receipts` in one SQLite transaction. Exact retries return the existing receipt; conflicting evidence returns HTTP 409 and is never overwritten.
 
-1. ASP.NET Core endpoint and server SQLite schema/migrations do not yet exist.
-2. Server transaction/idempotency receipt logic and canonical hash reproduction need implementation and cross-platform tests.
-3. Production authentication/token issuance/rotation and DigitalOcean secret management are not selected.
-4. Reverse-proxy request-size limits must be measured against real large sessions before confirming atomic v1 operational limits.
-5. A UI/manual command must be designed before operators can invoke synchronization; no automatic network timer is currently present.
-6. Vehicle identity is nullable and needs a server fleet/unidentified-session policy.
-7. Structured persisted verified-live derived rows are not yet present; the server must initially derive them from raw frames plus the correct verified RCM snapshot or add a versioned derived table later.
-8. The external MAUI client models/authentication/caching behavior must be reviewed before read DTO implementation.
+Remaining work before production deployment:
+
+1. Select the production DNS name/Droplet and provision a high-entropy token using an external environment file; establish a rotation procedure for Windows and mobile clients.
+2. Decide the fleet policy for packages whose `vehicleIdentifier` is null. They are preserved but omitted from vehicle-oriented queries.
+3. Measure real long-session payload sizes before designing any future chunked v2 protocol. API v1 remains one atomic request.
+4. Freeze mobile-specific read response DTOs with the separate MAUI repository; current read shapes are a safe historical foundation, not a claim of final mobile UI compatibility.
+5. Design a separate authenticated realtime ingestion path. Never reinterpret completed-session upload as a live feed.
+6. Define retention, monitoring, disk-capacity alerts, bearer-token rotation, and tested off-host backup/restore operations.
+7. A UI/manual command must still be designed before operators invoke synchronization; no automatic network timer was added.
 
 These blockers do not change the frozen API v1 upload request, acknowledgement, stable identities, or raw-data preservation rules above.
