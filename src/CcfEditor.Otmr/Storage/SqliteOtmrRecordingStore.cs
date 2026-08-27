@@ -3,13 +3,14 @@ using System.Threading.Channels;
 using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
 using CcfEditor.Otmr.Rcm;
+using CcfEditor.Otmr.Sync;
 using Microsoft.Data.Sqlite;
 
 namespace CcfEditor.Otmr.Storage;
 
 public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private readonly Channel<DbWorkItem> _writeQueue = Channel.CreateUnbounded<DbWorkItem>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -196,10 +197,11 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                     outbox.CommandText = """
                         INSERT INTO sync_outbox (
                             outbox_id, session_id, entity_type, state, created_utc, attempt_count)
-                        SELECT $outboxId, $sessionId, 'recording_session', 'PENDING', $createdUtc, 0
+                        SELECT $outboxId, $sessionId, 'recording_session', 'PENDING_UPLOAD', $createdUtc, 0
                         WHERE NOT EXISTS (
                             SELECT 1 FROM sync_outbox
-                            WHERE session_id = $sessionId AND state IN ('PENDING', 'UPLOADED'));
+                            WHERE session_id = $sessionId
+                              AND state IN ('PENDING_UPLOAD', 'UPLOADING', 'UPLOAD_FAILED', 'UPLOADED'));
                         """;
                     outbox.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
                     outbox.Parameters.AddWithValue("$sessionId", sessionId.Value.ToString("D"));
@@ -341,6 +343,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         if (maximum <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximum));
         await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
+        await RecoverStaleUploadLeasesAsync(DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
 
         var result = new List<OtmrPendingUpload>();
         await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -348,7 +351,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         command.CommandText = """
             SELECT outbox_id, session_id, created_utc, attempt_count, last_error
             FROM sync_outbox
-            WHERE state = 'PENDING'
+            WHERE state IN ('PENDING_UPLOAD', 'UPLOAD_FAILED')
             ORDER BY created_utc
             LIMIT $maximum;
             """;
@@ -373,14 +376,17 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         ThrowIfDisposed();
         await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
         await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        using SqliteTransaction transaction = connection.BeginTransaction();
 
         OtmrUploadSessionMetadata metadata;
         await using (SqliteCommand command = connection.CreateCommand())
         {
+            command.Transaction = transaction;
             command.CommandText = """
                 SELECT session_id, started_utc, finished_utc, software_version, com_port,
                        serial_settings, vehicle_identifier, vehicle_type, ccf_filename, ccf_sha256,
-                       rcm_profile_filename, rcm_profile_sha256, rcm_profile_json, sync_state
+                       rcm_profile_filename, rcm_profile_sha256, rcm_profile_json, sync_state,
+                       created_utc, notes, remote_session_id
                 FROM recording_sessions
                 WHERE session_id = $sessionId;
                 """;
@@ -403,12 +409,18 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 reader.IsDBNull(10) ? null : reader.GetString(10),
                 reader.IsDBNull(11) ? null : reader.GetString(11),
                 reader.IsDBNull(12) ? null : reader.GetString(12),
-                reader.GetString(13));
+                reader.GetString(13),
+                DateTimeOffset.Parse(reader.GetString(14)),
+                reader.IsDBNull(15) ? null : reader.GetString(15),
+                reader.IsDBNull(16) ? null : reader.GetString(16));
         }
+        if (metadata.FinishedUtc is null || metadata.SyncState == OtmrSyncStates.Recording)
+            throw new InvalidOperationException($"Recording session {sessionId:D} is still active and cannot be uploaded.");
 
         var rawEntries = new List<OtmrUploadRawEntry>();
         await using (SqliteCommand command = connection.CreateCommand())
         {
+            command.Transaction = transaction;
             command.CommandText = """
                 SELECT sequence, timestamp_utc, direction, data, interpretation
                 FROM raw_serial_entries
@@ -431,6 +443,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         var liveFrames = new List<OtmrUploadLiveFrame>();
         await using (SqliteCommand command = connection.CreateCommand())
         {
+            command.Transaction = transaction;
             command.CommandText = """
                 SELECT sequence, timestamp_utc, data, decode_status, decoder_version
                 FROM live_frames
@@ -452,16 +465,19 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 
         IReadOnlyList<Dictionary<string, object?>> inputs = await ReadRowsAsync(
             connection,
+            transaction,
             "SELECT * FROM rcm_input_tests WHERE session_id = $sessionId ORDER BY input_guid;",
             sessionId,
             cancellationToken).ConfigureAwait(false);
         IReadOnlyList<Dictionary<string, object?>> captures = await ReadRowsAsync(
             connection,
+            transaction,
             "SELECT * FROM rcm_capture_windows WHERE session_id = $sessionId ORDER BY created_utc, capture_id;",
             sessionId,
             cancellationToken).ConfigureAwait(false);
         IReadOnlyList<Dictionary<string, object?>> captureFrames = await ReadRowsAsync(
             connection,
+            transaction,
             """
             SELECT f.*
             FROM rcm_capture_frames f
@@ -473,6 +489,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
             cancellationToken).ConfigureAwait(false);
         IReadOnlyList<Dictionary<string, object?>> comparisons = await ReadRowsAsync(
             connection,
+            transaction,
             "SELECT * FROM rcm_comparisons WHERE session_id = $sessionId ORDER BY input_guid;",
             sessionId,
             cancellationToken).ConfigureAwait(false);
@@ -485,11 +502,155 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
             comparisons
         });
 
+        transaction.Commit();
         return new OtmrSessionUploadPackage(metadata, rawEntries, liveFrames, rcmPayloadJson);
+    }
+
+    public async Task<OtmrApiV1UploadRequest> BuildApiV1UploadPackageAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default) =>
+        OtmrApiV1PackageFactory.Create(
+            await BuildUploadPackageAsync(sessionId, cancellationToken).ConfigureAwait(false));
+
+    public async Task<int> RecoverStaleUploadLeasesAsync(
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+
+        var sessionIds = new List<string>();
+        await using (SqliteCommand find = connection.CreateCommand())
+        {
+            find.Transaction = transaction;
+            find.CommandText = """
+                SELECT session_id
+                FROM sync_outbox
+                WHERE state = 'UPLOADING'
+                  AND lease_expires_utc IS NOT NULL
+                  AND lease_expires_utc <= $nowUtc;
+                """;
+            find.Parameters.AddWithValue("$nowUtc", UtcText(nowUtc));
+            await using SqliteDataReader reader = await find.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                sessionIds.Add(reader.GetString(0));
+        }
+        if (sessionIds.Count == 0)
+        {
+            transaction.Commit();
+            return 0;
+        }
+
+        await using (SqliteCommand recover = connection.CreateCommand())
+        {
+            recover.Transaction = transaction;
+            recover.CommandText = """
+                UPDATE sync_outbox
+                SET state = 'UPLOAD_FAILED',
+                    lease_id = NULL,
+                    lease_acquired_utc = NULL,
+                    lease_expires_utc = NULL,
+                    last_error = CASE
+                        WHEN last_error IS NULL OR last_error = '' THEN 'Recovered stale upload lease.'
+                        ELSE last_error || ' | Recovered stale upload lease.'
+                    END
+                WHERE state = 'UPLOADING'
+                  AND lease_expires_utc IS NOT NULL
+                  AND lease_expires_utc <= $nowUtc;
+                """;
+            recover.Parameters.AddWithValue("$nowUtc", UtcText(nowUtc));
+            await recover.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        foreach (string sessionId in sessionIds.Distinct(StringComparer.Ordinal))
+        {
+            await using SqliteCommand session = connection.CreateCommand();
+            session.Transaction = transaction;
+            session.CommandText = """
+                UPDATE recording_sessions SET sync_state = 'UPLOAD_FAILED'
+                WHERE session_id = $sessionId AND sync_state = 'UPLOADING';
+                """;
+            session.Parameters.AddWithValue("$sessionId", sessionId);
+            await session.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        transaction.Commit();
+        lock (_stateSync)
+            _syncState = OtmrSyncStates.UploadFailed;
+        RaiseStatusChanged();
+        return sessionIds.Count;
+    }
+
+    public async Task<OtmrUploadLease?> TryAcquireUploadLeaseAsync(
+        Guid outboxId,
+        DateTimeOffset nowUtc,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default)
+    {
+        if (leaseDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration));
+        ThrowIfDisposed();
+        await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
+
+        Guid leaseId = Guid.NewGuid();
+        DateTimeOffset expiresUtc = nowUtc.ToUniversalTime().Add(leaseDuration);
+        await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        await using (SqliteCommand claim = connection.CreateCommand())
+        {
+            claim.Transaction = transaction;
+            claim.CommandText = """
+                UPDATE sync_outbox
+                SET state = 'UPLOADING',
+                    lease_id = $leaseId,
+                    lease_acquired_utc = $nowUtc,
+                    lease_expires_utc = $expiresUtc,
+                    last_attempt_utc = $nowUtc
+                WHERE outbox_id = $outboxId
+                  AND state IN ('PENDING_UPLOAD', 'UPLOAD_FAILED');
+                """;
+            claim.Parameters.AddWithValue("$leaseId", leaseId.ToString("D"));
+            claim.Parameters.AddWithValue("$nowUtc", UtcText(nowUtc));
+            claim.Parameters.AddWithValue("$expiresUtc", UtcText(expiresUtc));
+            claim.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
+            if (await claim.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            {
+                transaction.Rollback();
+                return null;
+            }
+        }
+
+        string sessionId;
+        int attemptCount;
+        await using (SqliteCommand read = connection.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText = "SELECT session_id, attempt_count FROM sync_outbox WHERE outbox_id = $outboxId;";
+            read.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
+            await using SqliteDataReader reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("Claimed upload outbox row disappeared.");
+            sessionId = reader.GetString(0);
+            attemptCount = reader.GetInt32(1);
+        }
+        await using (SqliteCommand session = connection.CreateCommand())
+        {
+            session.Transaction = transaction;
+            session.CommandText = "UPDATE recording_sessions SET sync_state = 'UPLOADING' WHERE session_id = $sessionId;";
+            session.Parameters.AddWithValue("$sessionId", sessionId);
+            await session.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        transaction.Commit();
+        lock (_stateSync)
+            _syncState = OtmrSyncStates.Uploading;
+        RaiseStatusChanged();
+        return new OtmrUploadLease(
+            outboxId, Guid.Parse(sessionId), leaseId, nowUtc.ToUniversalTime(), expiresUtc, attemptCount);
     }
 
     public async Task MarkUploadSucceededAsync(
         Guid outboxId,
+        Guid leaseId,
         string remoteSessionId,
         CancellationToken cancellationToken = default)
     {
@@ -503,23 +664,29 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         await using (SqliteCommand find = connection.CreateCommand())
         {
             find.Transaction = transaction;
-            find.CommandText = "SELECT session_id FROM sync_outbox WHERE outbox_id = $outboxId;";
+            find.CommandText = """
+                SELECT session_id FROM sync_outbox
+                WHERE outbox_id = $outboxId AND state = 'UPLOADING' AND lease_id = $leaseId;
+                """;
             find.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
+            find.Parameters.AddWithValue("$leaseId", leaseId.ToString("D"));
             sessionId = (string?)await find.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         }
         if (sessionId is null)
-            throw new InvalidOperationException("Upload outbox item was not found.");
+            throw new InvalidOperationException("The upload lease is missing, expired, or no longer owned by this operation.");
 
         await using (SqliteCommand updateOutbox = connection.CreateCommand())
         {
             updateOutbox.Transaction = transaction;
             updateOutbox.CommandText = """
                 UPDATE sync_outbox
-                SET state = 'UPLOADED', uploaded_utc = $uploadedUtc, last_error = NULL
-                WHERE outbox_id = $outboxId;
+                SET state = 'UPLOADED', uploaded_utc = $uploadedUtc, last_error = NULL,
+                    lease_id = NULL, lease_acquired_utc = NULL, lease_expires_utc = NULL
+                WHERE outbox_id = $outboxId AND lease_id = $leaseId;
                 """;
             updateOutbox.Parameters.AddWithValue("$uploadedUtc", UtcText(DateTimeOffset.UtcNow));
             updateOutbox.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
+            updateOutbox.Parameters.AddWithValue("$leaseId", leaseId.ToString("D"));
             await updateOutbox.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         await using (SqliteCommand updateSession = connection.CreateCommand())
@@ -527,7 +694,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
             updateSession.Transaction = transaction;
             updateSession.CommandText = """
                 UPDATE recording_sessions
-                SET sync_state = 'SYNCED', remote_session_id = $remoteSessionId
+                SET sync_state = 'UPLOADED', remote_session_id = $remoteSessionId
                 WHERE session_id = $sessionId;
                 """;
             updateSession.Parameters.AddWithValue("$remoteSessionId", remoteSessionId);
@@ -535,10 +702,14 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
             await updateSession.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         transaction.Commit();
+        lock (_stateSync)
+            _syncState = OtmrSyncStates.Uploaded;
+        RaiseStatusChanged();
     }
 
     public async Task MarkUploadFailedAsync(
         Guid outboxId,
+        Guid leaseId,
         string error,
         CancellationToken cancellationToken = default)
     {
@@ -546,19 +717,43 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         ThrowIfDisposed();
         await EnsureDatabaseAsync(cancellationToken).ConfigureAwait(false);
         await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = """
-            UPDATE sync_outbox
-            SET attempt_count = attempt_count + 1,
-                last_error = $error,
-                last_attempt_utc = $attemptedUtc,
-                state = 'PENDING'
-            WHERE outbox_id = $outboxId;
-            """;
-        command.Parameters.AddWithValue("$error", error);
-        command.Parameters.AddWithValue("$attemptedUtc", UtcText(DateTimeOffset.UtcNow));
-        command.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        string normalizedError = error.Length <= 2048 ? error : error[..2048];
+        string? sessionId;
+        await using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE sync_outbox
+                SET attempt_count = attempt_count + 1,
+                    last_error = $error,
+                    last_attempt_utc = $attemptedUtc,
+                    state = 'UPLOAD_FAILED',
+                    lease_id = NULL,
+                    lease_acquired_utc = NULL,
+                    lease_expires_utc = NULL
+                WHERE outbox_id = $outboxId AND state = 'UPLOADING' AND lease_id = $leaseId
+                RETURNING session_id;
+                """;
+            command.Parameters.AddWithValue("$error", normalizedError);
+            command.Parameters.AddWithValue("$attemptedUtc", UtcText(DateTimeOffset.UtcNow));
+            command.Parameters.AddWithValue("$outboxId", outboxId.ToString("D"));
+            command.Parameters.AddWithValue("$leaseId", leaseId.ToString("D"));
+            sessionId = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (sessionId is null)
+            throw new InvalidOperationException("The upload lease is missing, expired, or no longer owned by this operation.");
+        await using (SqliteCommand session = connection.CreateCommand())
+        {
+            session.Transaction = transaction;
+            session.CommandText = "UPDATE recording_sessions SET sync_state = 'UPLOAD_FAILED' WHERE session_id = $sessionId;";
+            session.Parameters.AddWithValue("$sessionId", sessionId);
+            await session.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        transaction.Commit();
+        lock (_stateSync)
+            _syncState = OtmrSyncStates.UploadFailed;
+        RaiseStatusChanged();
     }
 
     private bool TryQueue(DbWorkItem item)
@@ -611,9 +806,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 
             if (schemaVersion < CurrentSchemaVersion)
             {
-                // Schema 1 is the first versioned schema. Existing pre-versioned
-                // databases already have compatible tables, so creation above is
-                // idempotent and the version marker can now be committed.
+                await MigrateToSchemaVersion2Async(connection, cancellationToken).ConfigureAwait(false);
                 await using SqliteCommand setVersion = connection.CreateCommand();
                 setVersion.CommandText = $"PRAGMA user_version={CurrentSchemaVersion};";
                 await setVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -756,6 +949,9 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 last_attempt_utc TEXT NULL,
                 last_error TEXT NULL,
                 uploaded_utc TEXT NULL,
+                lease_id TEXT NULL,
+                lease_acquired_utc TEXT NULL,
+                lease_expires_utc TEXT NULL,
                 FOREIGN KEY(session_id) REFERENCES recording_sessions(session_id) ON DELETE CASCADE
             );
 
@@ -767,6 +963,72 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 ON sync_outbox(state, created_utc);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task MigrateToSchemaVersion2Async(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        foreach ((string Name, string Declaration) column in new[]
+                 {
+                     ("lease_id", "TEXT NULL"),
+                     ("lease_acquired_utc", "TEXT NULL"),
+                     ("lease_expires_utc", "TEXT NULL")
+                 })
+        {
+            if (await ColumnExistsAsync(connection, "sync_outbox", column.Name, cancellationToken).ConfigureAwait(false))
+                continue;
+            await using SqliteCommand addColumn = connection.CreateCommand();
+            addColumn.CommandText = $"ALTER TABLE sync_outbox ADD COLUMN {column.Name} {column.Declaration};";
+            await addColumn.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        await using (SqliteCommand normalizeSessions = connection.CreateCommand())
+        {
+            normalizeSessions.Transaction = transaction;
+            normalizeSessions.CommandText = """
+                UPDATE recording_sessions SET sync_state = 'UPLOADED' WHERE sync_state = 'SYNCED';
+                UPDATE recording_sessions SET sync_state = 'PENDING_UPLOAD'
+                    WHERE sync_state = 'INTERRUPTED_PENDING_UPLOAD';
+                """;
+            await normalizeSessions.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await using (SqliteCommand normalizeOutbox = connection.CreateCommand())
+        {
+            normalizeOutbox.Transaction = transaction;
+            normalizeOutbox.CommandText = """
+                UPDATE sync_outbox SET state = 'PENDING_UPLOAD' WHERE state = 'PENDING';
+                """;
+            await normalizeOutbox.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await using (SqliteCommand uniqueCaptureFrames = connection.CreateCommand())
+        {
+            uniqueCaptureFrames.Transaction = transaction;
+            uniqueCaptureFrames.CommandText = """
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_rcm_capture_frames_capture_sequence
+                    ON rcm_capture_frames(capture_id, sequence);
+                """;
+            await uniqueCaptureFrames.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        transaction.Commit();
+    }
+
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string table,
+        string column,
+        CancellationToken cancellationToken)
+    {
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table});";
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private static async Task<int> RecoverInterruptedSessionsAsync(
@@ -797,7 +1059,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 update.CommandText = """
                     UPDATE recording_sessions
                     SET finished_utc = $finishedUtc,
-                        sync_state = 'INTERRUPTED_PENDING_UPLOAD',
+                        sync_state = 'PENDING_UPLOAD',
                         notes = CASE
                             WHEN notes IS NULL OR notes = '' THEN 'Recovered after application interruption.'
                             ELSE notes || ' | Recovered after application interruption.'
@@ -815,10 +1077,11 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 outbox.CommandText = """
                     INSERT INTO sync_outbox (
                         outbox_id, session_id, entity_type, state, created_utc, attempt_count)
-                    SELECT $outboxId, $sessionId, 'recording_session', 'PENDING', $createdUtc, 0
+                    SELECT $outboxId, $sessionId, 'recording_session', 'PENDING_UPLOAD', $createdUtc, 0
                     WHERE NOT EXISTS (
                         SELECT 1 FROM sync_outbox
-                        WHERE session_id = $sessionId AND state IN ('PENDING', 'UPLOADED'));
+                        WHERE session_id = $sessionId
+                          AND state IN ('PENDING_UPLOAD', 'UPLOADING', 'UPLOAD_FAILED', 'UPLOADED'));
                     """;
                 outbox.Parameters.AddWithValue("$outboxId", Guid.NewGuid().ToString("D"));
                 outbox.Parameters.AddWithValue("$sessionId", sessionId);
@@ -1130,12 +1393,14 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
 
     private static async Task<IReadOnlyList<Dictionary<string, object?>>> ReadRowsAsync(
         SqliteConnection connection,
+        SqliteTransaction transaction,
         string sql,
         Guid sessionId,
         CancellationToken cancellationToken)
     {
         var rows = new List<Dictionary<string, object?>>();
         await using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = sql;
         command.Parameters.AddWithValue("$sessionId", sessionId.ToString("D"));
         await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

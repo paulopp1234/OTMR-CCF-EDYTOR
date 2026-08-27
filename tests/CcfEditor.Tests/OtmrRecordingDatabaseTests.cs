@@ -120,7 +120,7 @@ public sealed class OtmrRecordingDatabaseTests
                 Assert.Equal(1L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM rcm_capture_windows;"));
                 Assert.Equal(1L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM rcm_capture_frames;"));
                 Assert.Equal(1L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM rcm_comparisons;"));
-                Assert.Equal(1L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM sync_outbox WHERE state='PENDING';"));
+                Assert.Equal(1L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM sync_outbox WHERE state='PENDING_UPLOAD';"));
 
                 await using SqliteCommand raw = connection.CreateCommand();
                 raw.CommandText = "SELECT data FROM raw_serial_entries WHERE sequence=1;";
@@ -186,12 +186,18 @@ public sealed class OtmrRecordingDatabaseTests
             await store.StopSessionAsync(DateTimeOffset.UtcNow);
             OtmrPendingUpload pending = Assert.Single(await store.GetPendingUploadsAsync());
 
-            await store.MarkUploadFailedAsync(pending.OutboxId, "offline");
+            OtmrUploadLease firstLease = Assert.IsType<OtmrUploadLease>(
+                await store.TryAcquireUploadLeaseAsync(
+                    pending.OutboxId, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1)));
+            await store.MarkUploadFailedAsync(pending.OutboxId, firstLease.LeaseId, "offline");
             OtmrPendingUpload retried = Assert.Single(await store.GetPendingUploadsAsync());
             Assert.Equal(1, retried.AttemptCount);
             Assert.Equal("offline", retried.LastError);
 
-            await store.MarkUploadSucceededAsync(retried.OutboxId, "remote-session-123");
+            OtmrUploadLease secondLease = Assert.IsType<OtmrUploadLease>(
+                await store.TryAcquireUploadLeaseAsync(
+                    retried.OutboxId, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1)));
+            await store.MarkUploadSucceededAsync(retried.OutboxId, secondLease.LeaseId, "remote-session-123");
             Assert.Empty(await store.GetPendingUploadsAsync());
         }
         finally

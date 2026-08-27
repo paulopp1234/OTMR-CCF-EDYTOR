@@ -1,6 +1,7 @@
 using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
 using CcfEditor.Otmr.Rcm;
+using CcfEditor.Otmr.Sync;
 
 namespace CcfEditor.Otmr.Storage;
 
@@ -47,6 +48,14 @@ public sealed record OtmrPendingUpload(
     int AttemptCount,
     string? LastError);
 
+public sealed record OtmrUploadLease(
+    Guid OutboxId,
+    Guid SessionId,
+    Guid LeaseId,
+    DateTimeOffset AcquiredUtc,
+    DateTimeOffset ExpiresUtc,
+    int AttemptCount);
+
 public sealed record OtmrUploadSessionMetadata(
     Guid SessionId,
     DateTimeOffset StartedUtc,
@@ -61,7 +70,10 @@ public sealed record OtmrUploadSessionMetadata(
     string? RcmProfileFilename,
     string? RcmProfileSha256,
     string? RcmProfileJsonSnapshot,
-    string SyncState);
+    string SyncState,
+    DateTimeOffset CreatedUtc = default,
+    string? Notes = null,
+    string? RemoteSessionId = null);
 
 public sealed record OtmrUploadRawEntry(
     long Sequence,
@@ -78,10 +90,9 @@ public sealed record OtmrUploadLiveFrame(
     string? DecoderVersion);
 
 /// <summary>
-/// Complete local session payload prepared for the future HTTPS uploader.
-/// Raw serial and live-frame collections can be split into batches using
-/// OtmrServerSyncContract.RecommendedBatchSize before transmission.
-/// RcmPayloadJson contains the structured RCM input/capture/comparison rows.
+/// Legacy complete local session projection. The HTTP wire contract is the
+/// strongly typed OtmrApiV1UploadRequest produced from this snapshot.
+/// RcmPayloadJson remains internal and is never double-encoded on the wire.
 /// </summary>
 public sealed record OtmrSessionUploadPackage(
     OtmrUploadSessionMetadata Session,
@@ -105,13 +116,8 @@ public static class OtmrDatabasePaths
 public static class OtmrServerSyncContract
 {
     public const string ApiVersion = "v1";
-    public const string CreateSessionRoute = "/api/v1/otmr/recording-sessions";
-    public const string RawEntriesBatchRouteTemplate = "/api/v1/otmr/recording-sessions/{sessionId}/raw-entries";
-    public const string LiveFramesBatchRouteTemplate = "/api/v1/otmr/recording-sessions/{sessionId}/live-frames";
-    public const string RcmResultsRouteTemplate = "/api/v1/otmr/recording-sessions/{sessionId}/rcm-results";
-    public const string CompleteSessionRouteTemplate = "/api/v1/otmr/recording-sessions/{sessionId}/complete";
+    public const string AtomicSessionUploadRoute = OtmrApiContract.AtomicSessionUploadRoute;
     public const string IdempotencyHeader = "Idempotency-Key";
-    public const int RecommendedBatchSize = 500;
 }
 
 public interface IOtmrRecordingStore : IAsyncDisposable
@@ -146,13 +152,38 @@ public interface IOtmrRecordingStore : IAsyncDisposable
         Guid sessionId,
         CancellationToken cancellationToken = default);
 
+    Task<OtmrApiV1UploadRequest> BuildApiV1UploadPackageAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default);
+
+    Task<int> RecoverStaleUploadLeasesAsync(
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken = default);
+
+    Task<OtmrUploadLease?> TryAcquireUploadLeaseAsync(
+        Guid outboxId,
+        DateTimeOffset nowUtc,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default);
+
     Task MarkUploadSucceededAsync(
         Guid outboxId,
+        Guid leaseId,
         string remoteSessionId,
         CancellationToken cancellationToken = default);
 
     Task MarkUploadFailedAsync(
         Guid outboxId,
+        Guid leaseId,
         string error,
         CancellationToken cancellationToken = default);
+}
+
+public static class OtmrSyncStates
+{
+    public const string Recording = "RECORDING";
+    public const string PendingUpload = "PENDING_UPLOAD";
+    public const string Uploading = "UPLOADING";
+    public const string Uploaded = "UPLOADED";
+    public const string UploadFailed = "UPLOAD_FAILED";
 }

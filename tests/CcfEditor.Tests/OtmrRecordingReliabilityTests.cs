@@ -97,7 +97,7 @@ public sealed class OtmrRecordingReliabilityTests
 
             OtmrSessionUploadPackage package = await recoveredStore.BuildUploadPackageAsync(sessionId);
             Assert.Equal(sessionId, package.Session.SessionId);
-            Assert.Equal("INTERRUPTED_PENDING_UPLOAD", package.Session.SyncState);
+            Assert.Equal(OtmrSyncStates.PendingUpload, package.Session.SyncState);
             Assert.Equal("171804", package.Session.VehicleIdentifier);
             Assert.Single(package.RawEntries);
             Assert.Equal(new byte[] { 0xFB, 0xFB, 0x01, 0xFF }, package.RawEntries[0].Data);
