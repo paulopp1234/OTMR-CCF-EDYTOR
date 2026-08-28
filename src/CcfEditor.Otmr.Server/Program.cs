@@ -173,8 +173,41 @@ app.MapGet("/api/v1/otmr/vehicles/{vehicleIdentifier}/configuration", async (
     return configuration is null ? Results.NotFound() : Results.Ok(configuration);
 });
 
-app.MapGet("/api/v1/otmr/vehicles/{vehicleIdentifier}/live", (string vehicleIdentifier) =>
-    Results.Ok(new OtmrLiveAvailability(vehicleIdentifier, LiveAvailable: false, AsOfUtc: null, Signals: Array.Empty<object>())));
+app.MapPost(OtmrRealtimeContract.LiveRouteTemplate, async (
+    string vehicleIdentifier,
+    OtmrRealtimeUpdateRequest request,
+    IOtmrServerDatabase database,
+    IOptions<OtmrServerOptions> configuredOptions,
+    CancellationToken cancellationToken) =>
+{
+    OtmrRealtimeValidationResult validation = OtmrRealtimeServerValidator.Validate(
+        vehicleIdentifier, request, configuredOptions.Value.MaximumRealtimeSignalUpdates);
+    if (!validation.IsValid)
+        return ApiError(StatusCodes.Status400BadRequest, null, validation.ErrorCode, validation.Message);
+
+    await database.StoreLiveUpdateAsync(request, cancellationToken).ConfigureAwait(false);
+    return Results.Ok(new OtmrRealtimeUpdateAcknowledgement(
+        OtmrApiContract.Version,
+        request.VehicleIdentifier,
+        Accepted: true,
+        request.TimestampUtc.ToUniversalTime(),
+        request.Signals.Count));
+});
+
+app.MapGet(OtmrRealtimeContract.LiveRouteTemplate, async (
+    string vehicleIdentifier,
+    IOtmrServerDatabase database,
+    IOptions<OtmrServerOptions> configuredOptions,
+    CancellationToken cancellationToken) =>
+{
+    int staleSeconds = Math.Max(1, configuredOptions.Value.LiveStaleAfterSeconds);
+    OtmrLiveAvailability live = await database.GetLiveAsync(
+        vehicleIdentifier,
+        DateTimeOffset.UtcNow,
+        TimeSpan.FromSeconds(staleSeconds),
+        cancellationToken).ConfigureAwait(false);
+    return Results.Ok(live);
+});
 
 app.Run();
 

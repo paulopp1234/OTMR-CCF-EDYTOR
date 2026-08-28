@@ -20,6 +20,13 @@ public partial class OtmrLiveControl : UserControl
 
     internal OtmrLiveState State => _liveService.State;
 
+    /// <summary>
+    /// Raised once for each genuine complete live frame emitted by the shared
+    /// OtmrLiveService. MainForm owns the downstream bench/RCM/realtime routing;
+    /// the control must not rely on a nullable visual-tree lookup for that path.
+    /// </summary>
+    internal event EventHandler<OtmrLiveFrameEventArgs>? GenuineLiveFrameReceived;
+
     public OtmrLiveControl()
     {
         InitializeComponent();
@@ -48,6 +55,8 @@ public partial class OtmrLiveControl : UserControl
     }
 
     private void RefreshPortsButton_Click(object? sender, EventArgs e) => RefreshPorts();
+
+    private void PortComboBox_SelectedIndexChanged(object? sender, EventArgs e) => UpdateStateUi();
 
     private void RefreshPorts()
     {
@@ -353,7 +362,7 @@ public partial class OtmrLiveControl : UserControl
             _assembledFrameCount++;
             statusLabel.Text =
                 $"Complete RX frame #{_assembledFrameCount}: {e.Frame.Length} bytes | {e.Frame.Hex}";
-            (FindForm() as MainForm)?.ReportOtmrLiveFrame(e.Timestamp, e.Frame);
+            GenuineLiveFrameReceived?.Invoke(this, e);
         }
 
         if (InvokeRequired)
@@ -477,7 +486,7 @@ public partial class OtmrLiveControl : UserControl
         bool disconnected = state == OtmrLiveState.Disconnected;
         bool hasPort = portComboBox.SelectedItem is string;
         connectButton.Enabled = !_busy && disconnected && hasPort;
-        startLiveButton.Enabled = !_busy && state == OtmrLiveState.ConnectedIdle && _selectedCcf is not null;
+        startLiveButton.Enabled = !_busy && state == OtmrLiveState.ConnectedIdle;
         stopLiveButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames;
         stopRestoreButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.NotLive;
         disconnectButton.Enabled = !_busy && state != OtmrLiveState.Disconnected;

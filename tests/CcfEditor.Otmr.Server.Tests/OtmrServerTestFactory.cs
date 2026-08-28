@@ -27,7 +27,9 @@ internal sealed class OtmrServerTestFactory(bool failBeforeReceipt = false) : We
                 ["OtmrServer:MaximumUploadBodyBytes"] = "10485760",
                 ["OtmrServer:MaximumQueryResultCount"] = "100",
                 ["OtmrServer:MaximumSessionResultCount"] = "20",
-                ["OtmrServer:MaximumRecordRangeDays"] = "31"
+                ["OtmrServer:MaximumRecordRangeDays"] = "31",
+                ["OtmrServer:MaximumRealtimeSignalUpdates"] = "100",
+                ["OtmrServer:LiveStaleAfterSeconds"] = "30"
             });
         });
         if (failBeforeReceipt)

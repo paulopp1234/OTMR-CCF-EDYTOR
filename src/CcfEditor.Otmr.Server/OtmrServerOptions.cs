@@ -11,4 +11,6 @@ public sealed class OtmrServerOptions
     public int MaximumQueryResultCount { get; set; } = 1_000;
     public int MaximumSessionResultCount { get; set; } = 100;
     public int MaximumRecordRangeDays { get; set; } = 31;
+    public int MaximumRealtimeSignalUpdates { get; set; } = 1_000;
+    public int LiveStaleAfterSeconds { get; set; } = 30;
 }

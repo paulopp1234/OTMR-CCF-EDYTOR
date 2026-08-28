@@ -15,12 +15,18 @@ public partial class OtmrServerSyncControl : UserControl
     private OtmrSyncUserSettings _syncSettings = new();
     private OtmrManualSyncService? _manualSyncService;
     private HttpClient? _syncHttpClient;
+    private HttpClient? _realtimeHttpClient;
+    private OtmrRealtimePublisher _realtimePublisher;
     private bool _syncBusy;
     private bool _closing;
+    private OtmrRealtimeSourceDiagnostics? _latestRealtimeSourceDiagnostics;
 
     public OtmrServerSyncControl()
     {
         InitializeComponent();
+        _realtimeHttpClient = new HttpClient();
+        _realtimePublisher = new OtmrRealtimePublisher(_realtimeHttpClient);
+        _realtimePublisher.StatusChanged += RealtimePublisher_StatusChanged;
         InitializeManualSyncUi();
         Disposed += OtmrServerSyncControl_Disposed;
     }
@@ -78,11 +84,13 @@ public partial class OtmrServerSyncControl : UserControl
     {
         syncServerUrlTextBox.Text = _syncSettings.ServerUrl;
         syncEnabledCheckBox.Checked = _syncSettings.SyncEnabled;
+        realtimePublishingCheckBox.Checked = _syncSettings.RealtimePublishingEnabled;
         syncAllowHttpTestServerCheckBox.Checked = _syncSettings.AllowInsecureKnownTestServer;
         syncApiTokenTextBox.Clear();
         syncApiTokenTextBox.PlaceholderText = _syncSettings.HasApiToken
             ? "Token saved securely - enter a new token to replace it"
             : "Enter token to save";
+        _realtimePublisher.Configure(_syncSettings.ToRealtimeConfiguration());
     }
 
     private OtmrSyncUserSettings SaveSyncSettingsFromUi()
@@ -93,18 +101,94 @@ public partial class OtmrServerSyncControl : UserControl
             ServerUrl = syncServerUrlTextBox.Text.Trim(),
             ApiToken = string.IsNullOrEmpty(replacementToken) ? _syncSettings.ApiToken : replacementToken,
             SyncEnabled = syncEnabledCheckBox.Checked,
+            RealtimePublishingEnabled = realtimePublishingCheckBox.Checked,
             AllowInsecureKnownTestServer = syncAllowHttpTestServerCheckBox.Checked
         };
 
         proposed.ToManualConfiguration().ValidateServerUri();
         _syncSettingsStore!.Save(proposed);
         _syncSettings = proposed;
+        _realtimePublisher.Configure(proposed.ToRealtimeConfiguration());
         syncApiTokenTextBox.Clear();
         syncApiTokenTextBox.PlaceholderText = proposed.HasApiToken
             ? "Token saved securely - enter a new token to replace it"
             : "Enter token to save";
         UpdateManualSyncButtons();
         return proposed;
+    }
+
+    internal bool PublishVerifiedLiveState(OtmrRealtimeDecodedState decodedState) =>
+        _realtimePublisher.TryPublish(decodedState);
+
+    internal OtmrRealtimePublisherStatus RealtimePublisherStatus => _realtimePublisher.Status;
+
+    internal OtmrRealtimePublisherDiagnostics RealtimePublisherDiagnostics => _realtimePublisher.Diagnostics;
+
+    internal void ReportRealtimeSourceDiagnostics(OtmrRealtimeSourceDiagnostics diagnostics)
+    {
+        _latestRealtimeSourceDiagnostics = diagnostics;
+        ApplyRealtimeSourceDiagnostics(diagnostics);
+    }
+
+    private void ApplyRealtimeSourceDiagnostics(OtmrRealtimeSourceDiagnostics diagnostics)
+    {
+        OtmrRealtimePublisherDiagnostics publisher = _realtimePublisher.Diagnostics;
+        realtimeDiagnosticsLabel.Text =
+            $"Frames received: {diagnostics.FramesReceived:N0} | Frames decoded: {diagnostics.FramesDecoded:N0} | " +
+            $"Verified state changes: {publisher.VerifiedStateChanges:N0} | " +
+            $"Publish attempts/successes/failures: {publisher.PublishAttempts:N0}/" +
+            $"{publisher.PublishSuccesses:N0}/{publisher.PublishFailures:N0}\r\n" +
+            $"RCM: {diagnostics.RcmFilename ?? "-"} | Verified mappings: {diagnostics.VerifiedMappingCount:N0} | " +
+            $"Vehicle ID: {diagnostics.VehicleIdentifier ?? "UNKNOWN"} | " +
+            $"Decoded states: {diagnostics.DecodedStateCount:N0} | " +
+            $"Publisher instance enabled: {_realtimePublisher.Status.Enabled}";
+    }
+
+    internal void ConfigureRealtimePublisherForTests(
+        OtmrRealtimePublisher publisher,
+        OtmrRealtimePublisherConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(publisher);
+        ArgumentNullException.ThrowIfNull(configuration);
+        _realtimePublisher.StatusChanged -= RealtimePublisher_StatusChanged;
+        _realtimePublisher.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _realtimeHttpClient?.Dispose();
+        _realtimeHttpClient = null;
+        _realtimePublisher = publisher;
+        _realtimePublisher.StatusChanged += RealtimePublisher_StatusChanged;
+        _realtimePublisher.Configure(configuration);
+        realtimePublishingCheckBox.Checked = configuration.Enabled;
+        ApplyRealtimePublisherStatus(_realtimePublisher.Status);
+    }
+
+    private void RealtimePublisher_StatusChanged(object? sender, OtmrRealtimePublisherStatusChangedEventArgs e)
+    {
+        if (_closing || IsDisposed)
+            return;
+        if (InvokeRequired)
+        {
+            BeginInvoke((Action)(() => ApplyRealtimePublisherStatus(e.Status)));
+            return;
+        }
+        ApplyRealtimePublisherStatus(e.Status);
+    }
+
+    private void ApplyRealtimePublisherStatus(OtmrRealtimePublisherStatus status)
+    {
+        realtimePublishingStateLabel.Text =
+            $"Realtime publishing: {(status.Enabled ? "ENABLED" : "DISABLED")}";
+        realtimeLastSendLabel.Text = status.LastSendUtc is null
+            ? "Last realtime send: Never"
+            : $"Last realtime send: {status.LastSendUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
+        realtimeLastResultLabel.Text = $"Last realtime result: {status.LastResult}";
+        realtimeLastErrorLabel.Text = string.IsNullOrWhiteSpace(status.LastError)
+            ? "Last realtime error: -"
+            : $"Last realtime error: {status.LastError}";
+        realtimeReasonLabel.Text = string.IsNullOrWhiteSpace(status.StatusReason)
+            ? "Only genuine state changes from explicitly verified mappings are published."
+            : status.StatusReason;
+        if (_latestRealtimeSourceDiagnostics is not null)
+            ApplyRealtimeSourceDiagnostics(_latestRealtimeSourceDiagnostics);
     }
 
     private void SaveSyncSettingsButton_Click(object? sender, EventArgs e)
@@ -225,6 +309,14 @@ public partial class OtmrServerSyncControl : UserControl
 
     private void SyncEnabledCheckBox_CheckedChanged(object? sender, EventArgs e) => UpdateManualSyncButtons();
 
+    private void RealtimePublishingCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (realtimePublishingCheckBox.Checked != _syncSettings.RealtimePublishingEnabled)
+            realtimeReasonLabel.Text = "Click SAVE SETTINGS to apply this realtime publishing choice.";
+        else
+            ApplyRealtimePublisherStatus(_realtimePublisher.Status);
+    }
+
     private void SetManualSyncBusy(bool busy)
     {
         _syncBusy = busy;
@@ -250,5 +342,16 @@ public partial class OtmrServerSyncControl : UserControl
         _manualSyncService = null;
         _syncHttpClient?.Dispose();
         _syncHttpClient = null;
+        _realtimePublisher.StatusChanged -= RealtimePublisher_StatusChanged;
+        _realtimePublisher.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _realtimeHttpClient?.Dispose();
     }
 }
+
+internal sealed record OtmrRealtimeSourceDiagnostics(
+    long FramesReceived,
+    long FramesDecoded,
+    string? RcmFilename,
+    int VerifiedMappingCount,
+    string? VehicleIdentifier,
+    int DecodedStateCount);

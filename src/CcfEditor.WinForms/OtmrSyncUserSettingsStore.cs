@@ -10,6 +10,7 @@ public sealed class OtmrSyncUserSettings
     public string ServerUrl { get; init; } = OtmrSyncOptions.KnownInsecureDigitalOceanTestServer;
     public string ApiToken { get; init; } = string.Empty;
     public bool SyncEnabled { get; init; }
+    public bool RealtimePublishingEnabled { get; init; }
     public bool AllowInsecureKnownTestServer { get; init; }
     public bool HasApiToken => !string.IsNullOrEmpty(ApiToken);
 
@@ -21,8 +22,17 @@ public sealed class OtmrSyncUserSettings
         AllowInsecureKnownTestServer = AllowInsecureKnownTestServer
     };
 
+    public OtmrRealtimePublisherConfiguration ToRealtimeConfiguration() => new()
+    {
+        ServerUrl = ServerUrl,
+        ApiToken = ApiToken,
+        Enabled = RealtimePublishingEnabled,
+        AllowInsecureKnownTestServer = AllowInsecureKnownTestServer
+    };
+
     public override string ToString() =>
-        $"ServerUrl={ServerUrl}; SyncEnabled={SyncEnabled}; AllowInsecureKnownTestServer={AllowInsecureKnownTestServer}; ApiToken=[REDACTED]";
+        $"ServerUrl={ServerUrl}; SyncEnabled={SyncEnabled}; RealtimePublishingEnabled={RealtimePublishingEnabled}; " +
+        $"AllowInsecureKnownTestServer={AllowInsecureKnownTestServer}; ApiToken=[REDACTED]";
 }
 
 /// <summary>
@@ -71,6 +81,7 @@ public sealed class OtmrSyncUserSettingsStore
                 : persisted.ServerUrl,
             ApiToken = token,
             SyncEnabled = persisted.SyncEnabled,
+            RealtimePublishingEnabled = persisted.RealtimePublishingEnabled,
             AllowInsecureKnownTestServer = persisted.AllowInsecureKnownTestServer
         };
     }
@@ -97,6 +108,7 @@ public sealed class OtmrSyncUserSettingsStore
         {
             ServerUrl = settings.ServerUrl,
             SyncEnabled = settings.SyncEnabled,
+            RealtimePublishingEnabled = settings.RealtimePublishingEnabled,
             AllowInsecureKnownTestServer = settings.AllowInsecureKnownTestServer,
             ProtectedApiToken = protectedToken
         };
@@ -113,6 +125,7 @@ public sealed class OtmrSyncUserSettingsStore
     {
         public string ServerUrl { get; set; } = OtmrSyncOptions.KnownInsecureDigitalOceanTestServer;
         public bool SyncEnabled { get; set; }
+        public bool RealtimePublishingEnabled { get; set; }
         public bool AllowInsecureKnownTestServer { get; set; }
         public string? ProtectedApiToken { get; set; }
     }

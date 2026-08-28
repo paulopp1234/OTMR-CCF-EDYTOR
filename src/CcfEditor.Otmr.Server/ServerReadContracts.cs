@@ -41,4 +41,23 @@ public sealed record OtmrLiveAvailability(
     string VehicleIdentifier,
     bool LiveAvailable,
     DateTimeOffset? AsOfUtc,
-    IReadOnlyList<object> Signals);
+    bool IsStale,
+    bool Online,
+    int StaleAfterSeconds,
+    string? SourceConnectionId,
+    string? RcmProfileFilename,
+    string? RcmProfileSha256,
+    IReadOnlyList<OtmrLiveSignalState> Signals);
+
+public sealed record OtmrLiveSignalState(
+    Guid SignalId,
+    string Connector,
+    string Pin,
+    string Function,
+    int? LogicalCard,
+    int? LogicalChannel,
+    string State,
+    int RawValue,
+    int? ObservedBitValue,
+    string Verification,
+    DateTimeOffset UpdatedUtc);

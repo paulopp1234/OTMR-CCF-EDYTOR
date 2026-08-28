@@ -41,13 +41,15 @@ public interface IOtmrServerDatabase
     Task<IReadOnlyList<OtmrServerSessionSummary>> GetSessionsAsync(string vehicleIdentifier, int offset, int maximum, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<OtmrHistoricalRecord>> GetRecordsAsync(string vehicleIdentifier, DateTimeOffset fromUtc, DateTimeOffset toUtc, int maximum, CancellationToken cancellationToken = default);
     Task<OtmrVehicleConfiguration?> GetConfigurationAsync(string vehicleIdentifier, CancellationToken cancellationToken = default);
+    Task StoreLiveUpdateAsync(OtmrRealtimeUpdateRequest request, CancellationToken cancellationToken = default);
+    Task<OtmrLiveAvailability> GetLiveAsync(string vehicleIdentifier, DateTimeOffset nowUtc, TimeSpan staleAfter, CancellationToken cancellationToken = default);
 }
 
 public sealed class OtmrServerDatabase(
     IOptions<OtmrServerOptions> options,
     IOtmrUploadPersistenceHook persistenceHook) : IOtmrServerDatabase
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     private readonly OtmrServerOptions _options = options.Value;
     private readonly IOtmrUploadPersistenceHook _persistenceHook = persistenceHook;
     public string DatabasePath => _options.DatabasePath;
@@ -188,6 +190,141 @@ public sealed class OtmrServerDatabase(
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;
         return new(vehicleIdentifier, Guid.Parse(reader.GetString(0)), ParseUtc(reader.GetString(1)), NullableText(reader, 2), NullableText(reader, 3), NullableText(reader, 4), NullableText(reader, 5), NullableText(reader, 6), NullableText(reader, 7));
+    }
+
+    public async Task StoreLiveUpdateAsync(
+        OtmrRealtimeUpdateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        await using (SqliteCommand vehicle = connection.CreateCommand())
+        {
+            vehicle.Transaction = transaction;
+            vehicle.CommandText = """
+                INSERT INTO live_vehicle_state(
+                    vehicle_identifier, as_of_utc, received_utc, source_connection_id,
+                    rcm_profile_filename, rcm_profile_sha256)
+                VALUES($vehicle,$asOf,$received,$source,$profileFile,$profileHash)
+                ON CONFLICT(vehicle_identifier) DO UPDATE SET
+                    as_of_utc=excluded.as_of_utc,
+                    received_utc=excluded.received_utc,
+                    source_connection_id=excluded.source_connection_id,
+                    rcm_profile_filename=excluded.rcm_profile_filename,
+                    rcm_profile_sha256=excluded.rcm_profile_sha256;
+                """;
+            Add(vehicle, "$vehicle", request.VehicleIdentifier);
+            Add(vehicle, "$asOf", UtcText(request.TimestampUtc));
+            Add(vehicle, "$received", UtcText(DateTimeOffset.UtcNow));
+            Add(vehicle, "$source", request.SourceConnectionId);
+            Add(vehicle, "$profileFile", request.RcmProfileFilename);
+            Add(vehicle, "$profileHash", request.RcmProfileSha256);
+            await vehicle.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (OtmrRealtimeSignalUpdate signal in request.Signals)
+        {
+            await using SqliteCommand update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                INSERT INTO live_signal_state(
+                    vehicle_identifier, signal_id, connector, pin, function,
+                    logical_card, logical_channel, state, raw_value, observed_bit_value,
+                    verification, updated_utc)
+                VALUES($vehicle,$signal,$connector,$pin,$function,$card,$channel,$state,$raw,$bit,$verification,$updated)
+                ON CONFLICT(vehicle_identifier,signal_id) DO UPDATE SET
+                    connector=excluded.connector,
+                    pin=excluded.pin,
+                    function=excluded.function,
+                    logical_card=excluded.logical_card,
+                    logical_channel=excluded.logical_channel,
+                    state=excluded.state,
+                    raw_value=excluded.raw_value,
+                    observed_bit_value=excluded.observed_bit_value,
+                    verification=excluded.verification,
+                    updated_utc=excluded.updated_utc;
+                """;
+            Add(update, "$vehicle", request.VehicleIdentifier);
+            Add(update, "$signal", signal.SignalId.ToString("D"));
+            Add(update, "$connector", signal.Connector);
+            Add(update, "$pin", signal.Pin);
+            Add(update, "$function", signal.Function);
+            Add(update, "$card", signal.LogicalCard);
+            Add(update, "$channel", signal.LogicalChannel);
+            Add(update, "$state", signal.State);
+            Add(update, "$raw", signal.RawValue);
+            Add(update, "$bit", signal.ObservedBitValue);
+            Add(update, "$verification", signal.Verification);
+            Add(update, "$updated", UtcText(request.TimestampUtc));
+            await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        transaction.Commit();
+    }
+
+    public async Task<OtmrLiveAvailability> GetLiveAsync(
+        string vehicleIdentifier,
+        DateTimeOffset nowUtc,
+        TimeSpan staleAfter,
+        CancellationToken cancellationToken = default)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        DateTimeOffset? asOfUtc;
+        string? sourceConnectionId;
+        string? profileFilename;
+        string? profileSha256;
+        await using (SqliteCommand vehicle = connection.CreateCommand())
+        {
+            vehicle.CommandText = """
+                SELECT as_of_utc, source_connection_id, rcm_profile_filename, rcm_profile_sha256
+                FROM live_vehicle_state WHERE vehicle_identifier=$vehicle;
+                """;
+            vehicle.Parameters.AddWithValue("$vehicle", vehicleIdentifier);
+            await using SqliteDataReader reader = await vehicle.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return new(vehicleIdentifier, false, null, false, false,
+                    checked((int)staleAfter.TotalSeconds), null, null, null,
+                    Array.Empty<OtmrLiveSignalState>());
+            }
+            asOfUtc = ParseUtc(reader.GetString(0));
+            sourceConnectionId = NullableText(reader, 1);
+            profileFilename = NullableText(reader, 2);
+            profileSha256 = NullableText(reader, 3);
+        }
+
+        var signals = new List<OtmrLiveSignalState>();
+        await using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT signal_id, connector, pin, function, logical_card, logical_channel,
+                       state, raw_value, observed_bit_value, verification, updated_utc
+                FROM live_signal_state
+                WHERE vehicle_identifier=$vehicle
+                ORDER BY connector, pin, signal_id;
+                """;
+            command.Parameters.AddWithValue("$vehicle", vehicleIdentifier);
+            await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                signals.Add(new(
+                    Guid.Parse(reader.GetString(0)),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                    reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                    reader.GetString(6),
+                    reader.GetInt32(7),
+                    reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                    reader.GetString(9),
+                    ParseUtc(reader.GetString(10))));
+            }
+        }
+
+        bool stale = nowUtc.ToUniversalTime() - asOfUtc.Value > staleAfter;
+        return new(vehicleIdentifier, true, asOfUtc, stale, !stale,
+            checked((int)staleAfter.TotalSeconds), sourceConnectionId,
+            profileFilename, profileSha256, signals);
     }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
@@ -333,8 +470,19 @@ public sealed class OtmrServerDatabase(
           raw_entry_count INTEGER NOT NULL, live_frame_count INTEGER NOT NULL, rcm_input_count INTEGER NOT NULL,
           rcm_capture_count INTEGER NOT NULL, rcm_capture_frame_count INTEGER NOT NULL, rcm_comparison_count INTEGER NOT NULL,
           FOREIGN KEY(session_id) REFERENCES recording_sessions(session_id) ON DELETE RESTRICT);
+        CREATE TABLE IF NOT EXISTS live_vehicle_state(
+          vehicle_identifier TEXT PRIMARY KEY, as_of_utc TEXT NOT NULL, received_utc TEXT NOT NULL,
+          source_connection_id TEXT NULL, rcm_profile_filename TEXT NULL, rcm_profile_sha256 TEXT NULL);
+        CREATE TABLE IF NOT EXISTS live_signal_state(
+          vehicle_identifier TEXT NOT NULL, signal_id TEXT NOT NULL, connector TEXT NOT NULL, pin TEXT NOT NULL,
+          function TEXT NOT NULL, logical_card INTEGER NULL, logical_channel INTEGER NULL, state TEXT NOT NULL,
+          raw_value INTEGER NOT NULL, observed_bit_value INTEGER NULL, verification TEXT NOT NULL, updated_utc TEXT NOT NULL,
+          PRIMARY KEY(vehicle_identifier,signal_id),
+          FOREIGN KEY(vehicle_identifier) REFERENCES live_vehicle_state(vehicle_identifier) ON DELETE CASCADE);
         CREATE INDEX IF NOT EXISTS ix_recording_sessions_vehicle_started ON recording_sessions(vehicle_identifier,started_utc DESC);
         CREATE INDEX IF NOT EXISTS ix_live_frames_timestamp ON live_frames(timestamp_utc);
-        PRAGMA user_version=1;
+        CREATE INDEX IF NOT EXISTS ix_live_signal_vehicle ON live_signal_state(vehicle_identifier);
+        UPDATE schema_info SET schema_version=2, applied_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE schema_version<2;
+        PRAGMA user_version=2;
         """;
 }

@@ -27,7 +27,9 @@ public partial class MainForm : Form
         hexGrid.DataSource = _hexBinding;
         otmrLiveControl.SetCurrentCcf(_document);
         otmrBenchControl.SetCurrentCcf(_document);
+        otmrLiveControl.GenuineLiveFrameReceived += OtmrLiveControl_GenuineLiveFrameReceived;
         otmrBenchControl.CurrentRcmProfileChanged += OtmrBenchControl_CurrentRcmProfileChanged;
+        otmrRcmLiveControl.VerifiedLiveStateDecoded += OtmrRcmLiveControl_VerifiedLiveStateDecoded;
     }
 
     private void OpenMenuItem_Click(object? sender, EventArgs e)

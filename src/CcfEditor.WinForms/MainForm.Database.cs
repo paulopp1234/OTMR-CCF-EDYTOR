@@ -1,4 +1,5 @@
 using System.Text;
+using CcfEditor.Core;
 using CcfEditor.Otmr.Storage;
 
 namespace CcfEditor.WinForms;
@@ -94,9 +95,25 @@ public partial class MainForm
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
+    private string? ReadRealtimeVehicleIdentifierFromCcf()
+    {
+        if (_document is null)
+            return null;
+
+        // The Class 171 live API is keyed by the recorder/unit identity. The
+        // separate 0x01C0 Vehicle field (for example 79804) is not that identity.
+        byte[] raw = _document.Header.GetRawBytes(CcfFieldDefinitions.Header.Unit, 7);
+        int terminator = Array.FindIndex(raw, value => value is 0x00 or 0xFF);
+        int length = terminator >= 0 ? terminator : raw.Length;
+        string value = Encoding.ASCII.GetString(raw, 0, length).Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        otmrLiveControl.GenuineLiveFrameReceived -= OtmrLiveControl_GenuineLiveFrameReceived;
         otmrBenchControl.CurrentRcmProfileChanged -= OtmrBenchControl_CurrentRcmProfileChanged;
+        otmrRcmLiveControl.VerifiedLiveStateDecoded -= OtmrRcmLiveControl_VerifiedLiveStateDecoded;
         if (_databaseTabLayoutHookInstalled)
         {
             tabs.SelectedIndexChanged -= DatabaseTabs_SelectedIndexChanged;

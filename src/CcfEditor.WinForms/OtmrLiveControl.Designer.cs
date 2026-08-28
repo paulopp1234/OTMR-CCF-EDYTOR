@@ -193,6 +193,7 @@ partial class OtmrLiveControl
         portComboBox.Dock = DockStyle.Fill;
         portComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
         portComboBox.Name = "portComboBox";
+        portComboBox.SelectedIndexChanged += PortComboBox_SelectedIndexChanged;
         refreshPortsButton.Dock = DockStyle.Fill;
         refreshPortsButton.Name = "refreshPortsButton";
         refreshPortsButton.Text = "Refresh Ports";

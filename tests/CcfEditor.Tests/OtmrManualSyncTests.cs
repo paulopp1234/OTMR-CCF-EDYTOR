@@ -193,6 +193,7 @@ public sealed class OtmrManualSyncTests
                 ServerUrl = OtmrSyncOptions.KnownInsecureDigitalOceanTestServer,
                 ApiToken = token,
                 SyncEnabled = true,
+                RealtimePublishingEnabled = true,
                 AllowInsecureKnownTestServer = true
             };
 
@@ -203,7 +204,10 @@ public sealed class OtmrManualSyncTests
             Assert.DoesNotContain(token, persisted, StringComparison.Ordinal);
             Assert.DoesNotContain(token, settings.ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain(token, settings.ToManualConfiguration().ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(token, settings.ToRealtimeConfiguration().ToString(), StringComparison.Ordinal);
             Assert.Equal(token, loaded.ApiToken);
+            Assert.True(loaded.RealtimePublishingEnabled);
+            Assert.Equal(token, loaded.ToRealtimeConfiguration().ApiToken);
         }
         finally
         {

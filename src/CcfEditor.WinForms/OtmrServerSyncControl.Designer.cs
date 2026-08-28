@@ -26,6 +26,15 @@ partial class OtmrServerSyncControl
     private Label syncLastResultLabel = null!;
     private Label syncLastErrorLabel = null!;
     private Button syncPendingRecordingsButton = null!;
+    private GroupBox realtimeStatusGroupBox = null!;
+    private TableLayoutPanel realtimeStatusLayout = null!;
+    private CheckBox realtimePublishingCheckBox = null!;
+    private Label realtimePublishingStateLabel = null!;
+    private Label realtimeLastSendLabel = null!;
+    private Label realtimeLastResultLabel = null!;
+    private Label realtimeLastErrorLabel = null!;
+    private Label realtimeReasonLabel = null!;
+    private Label realtimeDiagnosticsLabel = null!;
     private Label localEvidenceNoticeLabel = null!;
 
     protected override void Dispose(bool disposing)
@@ -59,6 +68,15 @@ partial class OtmrServerSyncControl
         syncLastResultLabel = new Label();
         syncLastErrorLabel = new Label();
         syncPendingRecordingsButton = new Button();
+        realtimeStatusGroupBox = new GroupBox();
+        realtimeStatusLayout = new TableLayoutPanel();
+        realtimePublishingCheckBox = new CheckBox();
+        realtimePublishingStateLabel = new Label();
+        realtimeLastSendLabel = new Label();
+        realtimeLastResultLabel = new Label();
+        realtimeLastErrorLabel = new Label();
+        realtimeReasonLabel = new Label();
+        realtimeDiagnosticsLabel = new Label();
         localEvidenceNoticeLabel = new Label();
         rootLayout.SuspendLayout();
         connectionGroupBox.SuspendLayout();
@@ -66,6 +84,8 @@ partial class OtmrServerSyncControl
         settingsButtonsPanel.SuspendLayout();
         uploadStatusGroupBox.SuspendLayout();
         uploadStatusLayout.SuspendLayout();
+        realtimeStatusGroupBox.SuspendLayout();
+        realtimeStatusLayout.SuspendLayout();
         SuspendLayout();
 
         rootLayout.AutoScroll = true;
@@ -73,13 +93,15 @@ partial class OtmrServerSyncControl
         rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         rootLayout.Controls.Add(connectionGroupBox, 0, 0);
         rootLayout.Controls.Add(uploadStatusGroupBox, 0, 1);
-        rootLayout.Controls.Add(localEvidenceNoticeLabel, 0, 2);
+        rootLayout.Controls.Add(realtimeStatusGroupBox, 0, 2);
+        rootLayout.Controls.Add(localEvidenceNoticeLabel, 0, 3);
         rootLayout.Dock = DockStyle.Fill;
         rootLayout.Name = "serverSyncRootLayout";
         rootLayout.Padding = new Padding(16);
-        rootLayout.RowCount = 3;
+        rootLayout.RowCount = 4;
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 230F));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 280F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 260F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 260F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         connectionGroupBox.Controls.Add(connectionLayout);
@@ -154,7 +176,7 @@ partial class OtmrServerSyncControl
         connectionNoticeLabel.Dock = DockStyle.Fill;
         connectionNoticeLabel.ForeColor = Color.DimGray;
         connectionNoticeLabel.Name = "connectionNoticeLabel";
-        connectionNoticeLabel.Text = "No automatic/background synchronization. TEST SERVER is anonymous /health; uploads use the securely stored bearer token.";
+        connectionNoticeLabel.Text = "Recording uploads remain manual. Realtime network activity occurs only after the separate opt-in is saved. Both use the same securely stored bearer token.";
         connectionNoticeLabel.TextAlign = ContentAlignment.MiddleLeft;
 
         uploadStatusGroupBox.Controls.Add(uploadStatusLayout);
@@ -216,6 +238,66 @@ partial class OtmrServerSyncControl
         syncPendingRecordingsButton.Text = "SYNC PENDING RECORDINGS";
         syncPendingRecordingsButton.Click += SyncPendingRecordingsButton_Click;
 
+        realtimeStatusGroupBox.Controls.Add(realtimeStatusLayout);
+        realtimeStatusGroupBox.Dock = DockStyle.Fill;
+        realtimeStatusGroupBox.Name = "realtimeStatusGroupBox";
+        realtimeStatusGroupBox.Padding = new Padding(12);
+        realtimeStatusGroupBox.Text = "GENUINE VERIFIED REALTIME";
+        realtimeStatusLayout.ColumnCount = 2;
+        realtimeStatusLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        realtimeStatusLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        realtimeStatusLayout.Controls.Add(realtimePublishingCheckBox, 0, 0);
+        realtimeStatusLayout.Controls.Add(realtimePublishingStateLabel, 1, 0);
+        realtimeStatusLayout.Controls.Add(realtimeLastSendLabel, 0, 1);
+        realtimeStatusLayout.SetColumnSpan(realtimeLastSendLabel, 2);
+        realtimeStatusLayout.Controls.Add(realtimeLastResultLabel, 0, 2);
+        realtimeStatusLayout.SetColumnSpan(realtimeLastResultLabel, 2);
+        realtimeStatusLayout.Controls.Add(realtimeLastErrorLabel, 0, 3);
+        realtimeStatusLayout.SetColumnSpan(realtimeLastErrorLabel, 2);
+        realtimeStatusLayout.Controls.Add(realtimeReasonLabel, 0, 4);
+        realtimeStatusLayout.SetColumnSpan(realtimeReasonLabel, 2);
+        realtimeStatusLayout.Controls.Add(realtimeDiagnosticsLabel, 0, 5);
+        realtimeStatusLayout.SetColumnSpan(realtimeDiagnosticsLabel, 2);
+        realtimeStatusLayout.Dock = DockStyle.Fill;
+        realtimeStatusLayout.Name = "realtimeStatusLayout";
+        realtimeStatusLayout.RowCount = 6;
+        realtimeStatusLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+        realtimeStatusLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+        realtimeStatusLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+        realtimeStatusLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+        realtimeStatusLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+        realtimeStatusLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        realtimePublishingCheckBox.AutoSize = true;
+        realtimePublishingCheckBox.Dock = DockStyle.Fill;
+        realtimePublishingCheckBox.Name = "realtimePublishingCheckBox";
+        realtimePublishingCheckBox.Text = "Publish verified live states";
+        realtimePublishingCheckBox.CheckedChanged += RealtimePublishingCheckBox_CheckedChanged;
+        realtimePublishingStateLabel.Dock = DockStyle.Fill;
+        realtimePublishingStateLabel.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        realtimePublishingStateLabel.Name = "realtimePublishingStateLabel";
+        realtimePublishingStateLabel.Text = "Realtime publishing: DISABLED";
+        realtimePublishingStateLabel.TextAlign = ContentAlignment.MiddleLeft;
+        realtimeLastSendLabel.Dock = DockStyle.Fill;
+        realtimeLastSendLabel.Name = "realtimeLastSendLabel";
+        realtimeLastSendLabel.Text = "Last realtime send: Never";
+        realtimeLastResultLabel.Dock = DockStyle.Fill;
+        realtimeLastResultLabel.Name = "realtimeLastResultLabel";
+        realtimeLastResultLabel.Text = "Last realtime result: DISABLED";
+        realtimeLastErrorLabel.Dock = DockStyle.Fill;
+        realtimeLastErrorLabel.ForeColor = Color.DarkRed;
+        realtimeLastErrorLabel.Name = "realtimeLastErrorLabel";
+        realtimeLastErrorLabel.Text = "Last realtime error: -";
+        realtimeReasonLabel.AutoEllipsis = true;
+        realtimeReasonLabel.Dock = DockStyle.Fill;
+        realtimeReasonLabel.ForeColor = Color.DimGray;
+        realtimeReasonLabel.Name = "realtimeReasonLabel";
+        realtimeReasonLabel.Text = "Only genuine state changes from explicitly verified mappings are published.";
+        realtimeDiagnosticsLabel.AutoEllipsis = true;
+        realtimeDiagnosticsLabel.Dock = DockStyle.Fill;
+        realtimeDiagnosticsLabel.ForeColor = Color.DimGray;
+        realtimeDiagnosticsLabel.Name = "realtimeDiagnosticsLabel";
+        realtimeDiagnosticsLabel.Text = "Frames received: 0 | Frames decoded: 0 | Verified state changes: 0 | Publish attempts/successes/failures: 0/0/0";
+
         localEvidenceNoticeLabel.Dock = DockStyle.Top;
         localEvidenceNoticeLabel.ForeColor = Color.DimGray;
         localEvidenceNoticeLabel.Name = "localEvidenceNoticeLabel";
@@ -231,6 +313,9 @@ partial class OtmrServerSyncControl
         uploadStatusLayout.ResumeLayout(true);
         uploadStatusLayout.PerformLayout();
         uploadStatusGroupBox.ResumeLayout(true);
+        realtimeStatusLayout.ResumeLayout(true);
+        realtimeStatusLayout.PerformLayout();
+        realtimeStatusGroupBox.ResumeLayout(true);
         settingsButtonsPanel.ResumeLayout(true);
         settingsButtonsPanel.PerformLayout();
         connectionLayout.ResumeLayout(true);

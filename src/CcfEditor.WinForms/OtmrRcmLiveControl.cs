@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using CcfEditor.Otmr.Live;
 using CcfEditor.Otmr.Rcm;
 
@@ -16,6 +17,9 @@ public partial class OtmrRcmLiveControl : UserControl
     private OtmrLiveState _liveState = OtmrLiveState.Disconnected;
     private IReadOnlyList<RcmVerifiedLiveSignal> _decodedSignals = Array.Empty<RcmVerifiedLiveSignal>();
     private DateTimeOffset? _latestFrameTimestamp;
+    private string? _activeRcmProfileSha256;
+
+    internal event EventHandler<VerifiedLiveStateDecodedEventArgs>? VerifiedLiveStateDecoded;
 
     public OtmrRcmLiveControl()
     {
@@ -34,6 +38,9 @@ public partial class OtmrRcmLiveControl : UserControl
         bool hasLoadedJson = profile is not null && !string.IsNullOrWhiteSpace(profilePath);
         _activeRcmProfile = hasLoadedJson ? profile : null;
         _activeRcmProfilePath = hasLoadedJson ? Path.GetFullPath(profilePath!) : null;
+        _activeRcmProfileSha256 = _activeRcmProfilePath is not null && File.Exists(_activeRcmProfilePath)
+            ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(_activeRcmProfilePath)))
+            : null;
         _decodedSignals = _verifiedLiveDecoder.DescribeVerifiedMappings(_activeRcmProfile);
         _latestFrameTimestamp = null;
         RefreshStatusAndGrid();
@@ -63,6 +70,11 @@ public partial class OtmrRcmLiveControl : UserControl
         _decodedSignals = _verifiedLiveDecoder.Decode(frame, _activeRcmProfile);
         _latestFrameTimestamp = timestamp;
         RefreshStatusAndGrid();
+        VerifiedLiveStateDecoded?.Invoke(this, new VerifiedLiveStateDecodedEventArgs(
+            timestamp,
+            _activeRcmProfilePath is null ? null : Path.GetFileName(_activeRcmProfilePath),
+            _activeRcmProfileSha256,
+            _decodedSignals.ToArray()));
     }
 
     internal IReadOnlyList<RcmVerifiedLiveSignal> GetDecodedSignalSnapshot() =>
@@ -148,4 +160,16 @@ public partial class OtmrRcmLiveControl : UserControl
                     ? $"{_decodedSignals.Count} explicitly verified RCM mapping(s) loaded; awaiting genuine live data."
                     : $"Decoded {_decodedSignals.Count} explicitly verified RCM mapping(s) from the latest genuine live frame.";
     }
+}
+
+internal sealed class VerifiedLiveStateDecodedEventArgs(
+    DateTimeOffset timestampUtc,
+    string? profileFilename,
+    string? profileSha256,
+    IReadOnlyList<RcmVerifiedLiveSignal> signals) : EventArgs
+{
+    public DateTimeOffset TimestampUtc { get; } = timestampUtc.ToUniversalTime();
+    public string? ProfileFilename { get; } = profileFilename;
+    public string? ProfileSha256 { get; } = profileSha256;
+    public IReadOnlyList<RcmVerifiedLiveSignal> Signals { get; } = signals;
 }

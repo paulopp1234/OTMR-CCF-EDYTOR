@@ -266,6 +266,127 @@ public sealed class OtmrServerIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(request)).StatusCode);
     }
 
+    [Fact]
+    public async Task GenuineRealtimePostMakesLiveAvailableAndLaterUpdateReplacesLatestSignal()
+    {
+        using var factory = new OtmrServerTestFactory();
+        using HttpClient client = factory.CreateAuthenticatedClient();
+        const string vehicle = "999321";
+        Guid signalId = Guid.NewGuid();
+
+        JsonElement before = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(vehicle));
+        Assert.False(before.GetProperty("liveAvailable").GetBoolean());
+        Assert.False(before.GetProperty("online").GetBoolean());
+        Assert.Empty(before.GetProperty("signals").EnumerateArray());
+
+        DateTimeOffset firstTimestamp = DateTimeOffset.UtcNow.AddSeconds(-2);
+        OtmrRealtimeUpdateRequest first = RealtimeUpdate(
+            vehicle, signalId, firstTimestamp, OtmrRealtimeContract.Active, rawValue: 1);
+        HttpResponseMessage firstResponse = await client.PostAsync(
+            OtmrRealtimeContract.LiveRoute(vehicle), RealtimeJsonContent(first));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+
+        JsonElement live = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(vehicle));
+        Assert.True(live.GetProperty("liveAvailable").GetBoolean());
+        Assert.True(live.GetProperty("online").GetBoolean());
+        Assert.False(live.GetProperty("isStale").GetBoolean());
+        Assert.Equal(firstTimestamp, live.GetProperty("asOfUtc").GetDateTimeOffset());
+        Assert.Equal("verified-profile.json", live.GetProperty("rcmProfileFilename").GetString());
+        Assert.Equal(new string('C', 64), live.GetProperty("rcmProfileSha256").GetString());
+        JsonElement signal = Assert.Single(live.GetProperty("signals").EnumerateArray());
+        Assert.Equal(signalId, signal.GetProperty("signalId").GetGuid());
+        Assert.Equal(OtmrRealtimeContract.Active, signal.GetProperty("state").GetString());
+        Assert.Equal(1, signal.GetProperty("rawValue").GetInt32());
+        Assert.Equal(OtmrRealtimeContract.Verified, signal.GetProperty("verification").GetString());
+
+        DateTimeOffset secondTimestamp = firstTimestamp.AddSeconds(1);
+        OtmrRealtimeUpdateRequest second = RealtimeUpdate(
+            vehicle, signalId, secondTimestamp, OtmrRealtimeContract.Inactive, rawValue: 0);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
+            OtmrRealtimeContract.LiveRoute(vehicle), RealtimeJsonContent(second))).StatusCode);
+
+        JsonElement replaced = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(vehicle));
+        JsonElement replacedSignal = Assert.Single(replaced.GetProperty("signals").EnumerateArray());
+        Assert.Equal(secondTimestamp, replaced.GetProperty("asOfUtc").GetDateTimeOffset());
+        Assert.Equal(OtmrRealtimeContract.Inactive, replacedSignal.GetProperty("state").GetString());
+        Assert.Equal(0, replacedSignal.GetProperty("rawValue").GetInt32());
+
+        await using SqliteConnection database = await OpenDatabaseAsync(factory.DatabasePath);
+        Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM live_vehicle_state;"));
+        Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM live_signal_state;"));
+        Assert.Equal(0, await ScalarLongAsync(database, "SELECT COUNT(*) FROM recording_sessions;"));
+    }
+
+    [Fact]
+    public async Task OldRealtimeUpdateIsRetainedButExplicitlyReportedStaleAndOffline()
+    {
+        using var factory = new OtmrServerTestFactory();
+        using HttpClient client = factory.CreateAuthenticatedClient();
+        DateTimeOffset oldTimestamp = DateTimeOffset.UtcNow.AddMinutes(-2);
+        OtmrRealtimeUpdateRequest update = RealtimeUpdate(
+            "800010", Guid.NewGuid(), oldTimestamp, OtmrRealtimeContract.Active, rawValue: 1);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
+            OtmrRealtimeContract.LiveRoute(update.VehicleIdentifier), RealtimeJsonContent(update))).StatusCode);
+
+        JsonElement live = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(update.VehicleIdentifier));
+        Assert.True(live.GetProperty("liveAvailable").GetBoolean());
+        Assert.True(live.GetProperty("isStale").GetBoolean());
+        Assert.False(live.GetProperty("online").GetBoolean());
+        Assert.Equal(30, live.GetProperty("staleAfterSeconds").GetInt32());
+        Assert.Equal(oldTimestamp, live.GetProperty("asOfUtc").GetDateTimeOffset());
+        Assert.Equal(OtmrRealtimeContract.Active,
+            Assert.Single(live.GetProperty("signals").EnumerateArray()).GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task RealtimeRequiresBearerAndVerifiedDataAndDoesNotAlterHistoricalUpload()
+    {
+        using var factory = new OtmrServerTestFactory();
+        OtmrRealtimeUpdateRequest update = RealtimeUpdate(
+            "700777", Guid.NewGuid(), DateTimeOffset.UtcNow, OtmrRealtimeContract.Active, rawValue: 1);
+        using HttpClient anonymous = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.PostAsync(
+            OtmrRealtimeContract.LiveRoute(update.VehicleIdentifier), RealtimeJsonContent(update))).StatusCode);
+
+        using HttpClient authenticated = factory.CreateAuthenticatedClient();
+        OtmrRealtimeUpdateRequest candidate = update with
+        {
+            Signals = update.Signals.Select(signal => signal with { Verification = "CANDIDATE" }).ToArray()
+        };
+        Assert.Equal(HttpStatusCode.BadRequest, (await authenticated.PostAsync(
+            OtmrRealtimeContract.LiveRoute(update.VehicleIdentifier), RealtimeJsonContent(candidate))).StatusCode);
+
+        Assert.Equal(OtmrApiContract.AtomicSessionUploadRoute, "/api/v1/otmr/recording-sessions");
+        OtmrApiV1UploadRequest historical = OtmrServerPackageFixture.Create();
+        Assert.Equal(HttpStatusCode.OK, (await UploadAsync(authenticated, historical)).StatusCode);
+        await using SqliteConnection database = await OpenDatabaseAsync(factory.DatabasePath);
+        Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM recording_sessions;"));
+        Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM server_upload_receipts;"));
+        Assert.Equal(0, await ScalarLongAsync(database, "SELECT COUNT(*) FROM live_vehicle_state;"));
+    }
+
+    private static OtmrRealtimeUpdateRequest RealtimeUpdate(
+        string vehicleIdentifier,
+        Guid signalId,
+        DateTimeOffset timestampUtc,
+        string state,
+        int rawValue) => new(
+            OtmrApiContract.Version,
+            vehicleIdentifier,
+            timestampUtc,
+            "source-session",
+            "verified-profile.json",
+            new string('C', 64),
+            new[]
+            {
+                new OtmrRealtimeSignalUpdate(
+                    signalId, "J1", "A", "Throttle 1", 0, 0,
+                    state, rawValue, rawValue, OtmrRealtimeContract.Verified)
+            });
+
+    private static StringContent RealtimeJsonContent(OtmrRealtimeUpdateRequest update) =>
+        new(JsonSerializer.Serialize(update, OtmrApiV1Json.Options), Encoding.UTF8, "application/json");
+
     private static async Task<HttpResponseMessage> UploadAsync(HttpClient client, OtmrApiV1UploadRequest package)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, OtmrApiContract.AtomicSessionUploadRoute);
