@@ -69,7 +69,7 @@ public partial class OtmrLiveControl
         try
         {
             await _recordingStore.StopSessionAsync(DateTimeOffset.UtcNow);
-            databaseMessageLabel.Text = "Recording stopped and flushed to SQLite. Session queued locally as PENDING_UPLOAD for the future online server.";
+            databaseMessageLabel.Text = "Recording stopped and flushed to SQLite. Session queued as PENDING_UPLOAD; use the SERVER SYNC tab when ready.";
         }
         catch (Exception ex)
         {
@@ -138,7 +138,7 @@ public partial class OtmrLiveControl
         databaseSessionLabel.Text = status?.SessionId is Guid id ? $"Session: {id:D}" : "Session: -";
         databaseCountsLabel.Text = status is null
             ? "Raw entries: 0 | Complete frames: 0"
-            : $"Raw entries: {status.RawEntryCount:N0} | Complete frames: {status.CompleteFrameCount:N0} | Sync: {status.SyncState}";
+            : $"Raw entries: {status.RawEntryCount:N0} | Complete frames: {status.CompleteFrameCount:N0}";
         databasePathLabel.Text = status?.DatabasePath ?? OtmrDatabasePaths.DefaultDatabasePath;
     }
 

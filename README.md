@@ -1,6 +1,6 @@
 # OTMR CCF Editor / Creator — .NET 8 WinForms
 
-Current released application revision: **v0.2**.
+Current released application revision: **v0.3.0**.
 
 > Controlled Class 171 bench validation update (2026-08-25): the application
 > now has an explicit selected-CCF preflight and a reply-gated, byte-proven live
@@ -145,6 +145,7 @@ Milestone 1 captures raw serial bytes but does not yet contain a verified Arrowv
 
 - **v0.1** — initial usable CCF viewer/editor foundation with CCF-only data provenance, Save As protection and per-app startup authorisation.
 - **v0.2** — adds the permanent right-hand Records field-description/schema-help pane, visible application revision and executable version metadata.
+- **v0.3.0** — current desktop application revision with OTMR live, RCM bench/live and manual server-sync foundations.
 
 This is a Visual Studio WinForms Designer project.
 

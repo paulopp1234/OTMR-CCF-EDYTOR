@@ -46,7 +46,8 @@ public sealed record OtmrPendingUpload(
     Guid SessionId,
     DateTimeOffset CreatedAtUtc,
     int AttemptCount,
-    string? LastError);
+    string? LastError,
+    DateTimeOffset? LastAttemptUtc = null);
 
 public sealed record OtmrUploadLease(
     Guid OutboxId,

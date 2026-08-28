@@ -8,12 +8,22 @@ public partial class MainForm
 {
     internal CcfDocument? GetCurrentCcfForBench() => _document;
 
-    internal void ReportOtmrLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame) =>
+    internal void ReportOtmrLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
+    {
         otmrBenchControl.ReportRawLiveFrame(timestamp, frame);
+        otmrRcmLiveControl.ReportRawLiveFrame(timestamp, frame);
+    }
 
-    internal void ReportOtmrLiveState(OtmrLiveState state) =>
+    internal void ReportOtmrLiveState(OtmrLiveState state)
+    {
         otmrBenchControl.SetOtmrLiveState(state);
+        otmrRcmLiveControl.SetOtmrLiveState(state);
+    }
 
-    internal void ReportActiveRcmProfileChanged(RcmProfile? profile) =>
-        otmrLiveControl.SetActiveRcmProfile(profile);
+    private void OtmrBenchControl_CurrentRcmProfileChanged(
+        object? sender,
+        CurrentRcmProfileChangedEventArgs e) =>
+        otmrRcmLiveControl.SetActiveRcmProfile(
+            e.IsLoadedJson ? e.Profile : null,
+            e.IsLoadedJson ? e.ProfilePath : null);
 }

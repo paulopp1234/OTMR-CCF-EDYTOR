@@ -349,7 +349,7 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
         await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
-            SELECT outbox_id, session_id, created_utc, attempt_count, last_error
+            SELECT outbox_id, session_id, created_utc, attempt_count, last_error, last_attempt_utc
             FROM sync_outbox
             WHERE state IN ('PENDING_UPLOAD', 'UPLOAD_FAILED')
             ORDER BY created_utc
@@ -364,7 +364,8 @@ public sealed class SqliteOtmrRecordingStore : IOtmrRecordingStore
                 Guid.Parse(reader.GetString(1)),
                 DateTimeOffset.Parse(reader.GetString(2)),
                 reader.GetInt32(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4)));
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5))));
         }
         return result;
     }

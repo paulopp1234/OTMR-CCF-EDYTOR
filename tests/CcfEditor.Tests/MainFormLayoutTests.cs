@@ -1,13 +1,317 @@
 using System.Reflection;
 using CcfEditor.Core;
+using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
 using CcfEditor.Otmr.Rcm;
+using CcfEditor.Otmr.Sync;
 using CcfEditor.WinForms;
 
 namespace CcfEditor.Tests;
 
 public sealed class MainFormLayoutTests
 {
+    [Fact]
+    public void DesktopApplicationVersionMetadataAndWindowTitleAreV030()
+    {
+        Assembly desktopAssembly = typeof(MainForm).Assembly;
+        AssemblyInformationalVersionAttribute informational = Assert.IsType<AssemblyInformationalVersionAttribute>(
+            desktopAssembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>());
+
+        Assert.Equal(new Version(0, 3, 0, 0), desktopAssembly.GetName().Version);
+        Assert.Equal("0.3.0.0", System.Diagnostics.FileVersionInfo.GetVersionInfo(desktopAssembly.Location).FileVersion);
+        Assert.Equal("0.3.0", informational.InformationalVersion);
+
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm();
+            Assert.Equal("OTMR CCF Editor / Creator v0.3.0 - test OTMR M1 + I/O Bench", form.Text);
+            Assert.Equal(
+                "No CCF loaded | v0.3.0 test / OTMR M1 + I/O Bench",
+                FindToolStripItem<ToolStripStatusLabel>(form, "fileStatusLabel").Text);
+        });
+    }
+
+    [Fact]
+    public void OtmrLiveLayoutKeepsCaptureGridUsableAndCaptureUpdatesSurviveTemporaryNoRoomState()
+    {
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm
+            {
+                StartPosition = FormStartPosition.Manual,
+                Location = Point.Empty,
+                Size = new Size(1500, 900)
+            };
+            form.Show();
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            tabs.SelectedIndex = 4;
+            Application.DoEvents();
+
+            OtmrLiveControl live = Find<OtmrLiveControl>(form, "otmrLiveControl");
+            OtmrLiveService liveService = GetPrivateField<OtmrLiveService>(live, "_liveService");
+            DataGridView capture = Find<DataGridView>(live, "captureGrid");
+
+            Assert.Empty(live.Controls.Find("syncServerUrlTextBox", true));
+            Assert.Empty(live.Controls.Find("syncPendingRecordingsButton", true));
+            Assert.Empty(live.Controls.Find("decodedSignalsGrid", true));
+            Assert.Empty(live.Controls.Find("decodedSignalsGroupBox", true));
+            Assert.True(capture.ClientSize.Height >= 300,
+                $"Desktop capture viewport is only {capture.ClientSize.Height}px high; live={live.Height}, root={Find<TableLayoutPanel>(live, "rootLayout").Height}, connection={Find<GroupBox>(live, "connectionGroupBox").Height}, database={Find<GroupBox>(live, "databaseRecordingGroupBox").Height}, captureGroup={Find<GroupBox>(live, "captureGroupBox").Height}.");
+            Assert.True(capture.ClientSize.Height >= live.ClientSize.Height * 0.40,
+                $"Raw communication log ({capture.ClientSize.Height}px) does not receive most remaining OTMR Live space ({live.ClientSize.Height}px total)." );
+            int desktopCaptureHeight = capture.ClientSize.Height;
+            Console.WriteLine($"OTMR Live desktop layout: capture={desktopCaptureHeight}px.");
+
+            for (int index = 0; index < 12; index++)
+            {
+                InvokePrivate(liveService, "AddCapture", new OtmrCaptureEntry(
+                    DateTimeOffset.UtcNow.AddMilliseconds(index),
+                    OtmrDirection.Rx,
+                    new byte[] { 0xFB, 0xFB, (byte)index, 0xFF },
+                    "layout regression"));
+            }
+            Application.DoEvents();
+            Assert.Equal(12, capture.Rows.Count);
+            Assert.True(DataGridViewViewport.TryScrollToRow(capture, capture.Rows.Count - 1));
+
+            // Reproduce the runtime failure: the async capture callback arrives
+            // while the lower grid has no row display area beneath its headers.
+            Size minimum = capture.MinimumSize;
+            Control parent = capture.Parent!;
+            parent.SuspendLayout();
+            capture.MinimumSize = Size.Empty;
+            capture.Size = new Size(Math.Max(1, capture.Width), capture.ColumnHeadersHeight + 1);
+            Assert.False(DataGridViewViewport.CanDisplayRows(capture));
+            InvokePrivate(liveService, "AddCapture", new OtmrCaptureEntry(
+                DateTimeOffset.UtcNow,
+                OtmrDirection.Rx,
+                new byte[] { 0xFB, 0xFB, 0x7E, 0xFF },
+                "arrived during layout"));
+            Assert.Equal(13, capture.Rows.Count);
+            Assert.True(GetPrivateValue<bool>(live, "_captureScrollPending"));
+
+            capture.MinimumSize = minimum;
+            parent.ResumeLayout(performLayout: true);
+            form.PerformLayout();
+            Application.DoEvents();
+            Assert.True(DataGridViewViewport.CanDisplayRows(capture));
+            Assert.False(GetPrivateValue<bool>(live, "_captureScrollPending"));
+            Assert.True(capture.FirstDisplayedScrollingRowIndex >= 0);
+
+            InvokePrivate(live, "RefreshCaptureGrid");
+            Application.DoEvents();
+            Assert.Equal(13, capture.Rows.Count);
+
+            form.Size = new Size(1200, 760);
+            Application.DoEvents();
+            Assert.True(capture.ClientSize.Height >= 250,
+                $"Smaller-window capture viewport is only {capture.ClientSize.Height}px high.");
+            int smallerCaptureHeight = capture.ClientSize.Height;
+            Console.WriteLine($"OTMR Live smaller layout: capture={smallerCaptureHeight}px.");
+
+            form.Size = new Size(1800, 1000);
+            Application.DoEvents();
+            Assert.True(capture.ClientSize.Height > desktopCaptureHeight,
+                $"Expanding/maximizing the window did not increase the raw log: expanded={capture.ClientSize.Height}px, desktop={desktopCaptureHeight}px.");
+            Console.WriteLine($"OTMR Live expanded layout: capture={capture.ClientSize.Height}px.");
+        });
+    }
+
+    [Fact]
+    public void RcmLiveHasFullSizeDecodedGridAndTabSelectionDoesNotChangeLiveStateOrInvokeSync()
+    {
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm
+            {
+                StartPosition = FormStartPosition.Manual,
+                Location = Point.Empty,
+                Size = new Size(1500, 900)
+            };
+            form.Show();
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            OtmrLiveControl live = Find<OtmrLiveControl>(form, "otmrLiveControl");
+            OtmrLiveService service = GetPrivateField<OtmrLiveService>(live, "_liveService");
+            InvokePrivate(service, "SetState", OtmrLiveState.LiveReady);
+            Application.DoEvents();
+            OtmrLiveState before = service.State;
+
+            TabPage rcmTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == "RCM LIVE");
+            tabs.SelectedTab = rcmTab;
+            Application.DoEvents();
+
+            OtmrRcmLiveControl rcm = Find<OtmrRcmLiveControl>(rcmTab, "otmrRcmLiveControl");
+            DataGridView grid = Find<DataGridView>(rcm, "decodedSignalsGrid");
+            Assert.Equal(before, service.State);
+            Assert.Equal(OtmrLiveState.LiveReady, before);
+            Assert.True(grid.Visible && grid.ClientSize.Height >= 550,
+                $"RCM LIVE decoded grid is only {grid.ClientSize.Height}px high.");
+            Console.WriteLine($"RCM LIVE desktop layout: decoded grid={grid.ClientSize.Height}px, tab={rcmTab.ClientSize.Height}px.");
+            Assert.Equal(new[] { "Physical", "Function", "Logical", "State", "Raw", "Verification" },
+                grid.Columns.Cast<DataGridViewColumn>().Select(column => column.HeaderText));
+            Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
+            Assert.Equal("No RCM profile loaded.",
+                Find<Label>(rcm, "decodedSignalsStatusLabel").Text);
+            Assert.Contains("OTMR LIVE READY", Find<Label>(rcm, "liveStateStatusLabel").Text,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(rcm.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic),
+                field => typeof(OtmrManualSyncService).IsAssignableFrom(field.FieldType));
+        });
+    }
+
+    [Fact]
+    public void RcmLiveFollowsAuthoritativeLoadedJsonAcrossA_B_CAndCcfChanges()
+    {
+        RunInStaThread(() =>
+        {
+            string folder = Path.Combine(Path.GetTempPath(), $"CcfEditor.RcmLiveProfiles.{Guid.NewGuid():N}");
+            Directory.CreateDirectory(folder);
+            string pathA = Path.Combine(folder, "profile-A.json");
+            string pathB = Path.Combine(folder, "profile-B.json");
+            string pathC = Path.Combine(folder, "profile-C.json");
+            try
+            {
+                RcmProfile profileA = ProfileWithVerifiedMappings("A", 3);
+                RcmProfile profileB = ProfileWithVerifiedMappings("B", 7);
+                RcmProfile profileC = ProfileWithVerifiedMappings("C", 0);
+                RcmProfileJson.SaveAsync(pathA, profileA, DateTimeOffset.UtcNow).GetAwaiter().GetResult();
+                RcmProfileJson.SaveAsync(pathB, profileB, DateTimeOffset.UtcNow).GetAwaiter().GetResult();
+                RcmProfileJson.SaveAsync(pathC, profileC, DateTimeOffset.UtcNow).GetAwaiter().GetResult();
+
+                using var form = new MainForm();
+                form.Show();
+                Application.DoEvents();
+                OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
+                OtmrRcmLiveControl rcm = Find<OtmrRcmLiveControl>(form, "otmrRcmLiveControl");
+                OtmrLiveControl live = Find<OtmrLiveControl>(form, "otmrLiveControl");
+                DataGridView grid = Find<DataGridView>(rcm, "decodedSignalsGrid");
+                Label profileLabel = Find<Label>(rcm, "rcmProfileStatusLabel");
+                Label countLabel = Find<Label>(rcm, "verifiedMappingsStatusLabel");
+
+                Assert.Equal("No RCM profile loaded.", Find<Label>(rcm, "decodedSignalsStatusLabel").Text);
+                InvokeLoadCcf(form, FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf"));
+                Application.DoEvents();
+                Assert.Equal("No RCM profile loaded.", Find<Label>(rcm, "decodedSignalsStatusLabel").Text);
+                InvokePrivate(bench, "CreateRcmProfileButton_Click", null, EventArgs.Empty);
+                Application.DoEvents();
+                Assert.NotNull(GetPrivateField<RcmProfile>(bench, "_rcmProfile"));
+                Assert.Null(bench.GetType().GetField("_rcmProfilePath", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(bench));
+                Assert.Equal("No RCM profile loaded.", Find<Label>(rcm, "decodedSignalsStatusLabel").Text);
+
+                InvokePrivateAsync(bench, "LoadRcmProfileAsync", pathA, CancellationToken.None);
+                Application.DoEvents();
+                Assert.Equal(3, grid.Rows.Count);
+                Assert.Contains("profile-A.json", profileLabel.Text, StringComparison.Ordinal);
+                Assert.Equal("Verified mappings: 3", countLabel.Text);
+                Assert.All(grid.Rows.Cast<DataGridViewRow>(), row =>
+                {
+                    Assert.Equal("UNKNOWN", Convert.ToString(row.Cells["decodedStateColumn"].Value));
+                    Assert.Contains("Awaiting", Convert.ToString(row.Cells["decodedRawColumn"].Value),
+                        StringComparison.OrdinalIgnoreCase);
+                });
+
+                InvokePrivateAsync(bench, "LoadRcmProfileAsync", pathB, CancellationToken.None);
+                Application.DoEvents();
+                Assert.Equal(7, grid.Rows.Count);
+                Assert.Contains("profile-B.json", profileLabel.Text, StringComparison.Ordinal);
+                Assert.DoesNotContain("profile-A.json", profileLabel.Text, StringComparison.Ordinal);
+                Assert.Equal("Verified mappings: 7", countLabel.Text);
+                Assert.All(grid.Rows.Cast<DataGridViewRow>(), row =>
+                    Assert.StartsWith("B", Convert.ToString(row.Cells["decodedPhysicalColumn"].Value)!.Split('-')[1],
+                        StringComparison.Ordinal));
+
+                byte[] liveBytes = new byte[11];
+                liveBytes[0] = 0xFB;
+                liveBytes[1] = 0xFB;
+                liveBytes[2] = 0x38;
+                Array.Fill(liveBytes, (byte)0x01, 3, 7);
+                liveBytes[^1] = 0xFF;
+                OtmrLiveFrame currentProfileFrame = Assert.Single(new OtmrLiveFrameAssembler().Append(liveBytes));
+                InvokePrivate(live, "LiveService_FrameReceived", null,
+                    new OtmrLiveFrameEventArgs(DateTimeOffset.UtcNow, currentProfileFrame));
+                Application.DoEvents();
+                Assert.Equal(7, grid.Rows.Count);
+                Assert.All(grid.Rows.Cast<DataGridViewRow>(), row =>
+                    Assert.Equal("ACTIVE", Convert.ToString(row.Cells["decodedStateColumn"].Value)));
+
+                TabControl tabs = Find<TabControl>(form, "tabs");
+                tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == "OTMR Live");
+                Application.DoEvents();
+                tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == "RCM LIVE");
+                Application.DoEvents();
+                Assert.Equal(Path.GetFullPath(pathB), GetPrivateField<string>(bench, "_rcmProfilePath"));
+                Assert.Contains("profile-B.json", profileLabel.Text, StringComparison.Ordinal);
+                Assert.Equal(7, grid.Rows.Count);
+
+                InvokeLoadCcf(form, FindFromRoot("TestData", "CLASS171_GUI_TEST.ccf"));
+                Application.DoEvents();
+                Assert.Equal(Path.GetFullPath(pathB), GetPrivateField<string>(bench, "_rcmProfilePath"));
+                Assert.Equal(7, grid.Rows.Count);
+                Assert.Contains("profile-B.json", profileLabel.Text, StringComparison.Ordinal);
+
+                InvokePrivateAsync(bench, "LoadRcmProfileAsync", pathC, CancellationToken.None);
+                Application.DoEvents();
+                Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
+                Assert.Contains("profile-C.json", profileLabel.Text, StringComparison.Ordinal);
+                Assert.Equal("Verified mappings: 0", countLabel.Text);
+                Assert.Equal("No verified RCM mappings available for decoded live signals.",
+                    Find<Label>(rcm, "decodedSignalsStatusLabel").Text);
+            }
+            finally
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+        });
+    }
+
+    [Fact]
+    public void ServerSyncHasDedicatedSpaciousTabAndOpeningItPerformsNoExplicitNetworkAction()
+    {
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm
+            {
+                StartPosition = FormStartPosition.Manual,
+                Location = Point.Empty,
+                Size = new Size(1200, 760)
+            };
+            form.Show();
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            TabPage syncTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == "SERVER SYNC");
+            tabs.SelectedTab = syncTab;
+            Application.DoEvents();
+
+            OtmrServerSyncControl sync = Find<OtmrServerSyncControl>(syncTab, "otmrServerSyncControl");
+            GroupBox connection = Find<GroupBox>(sync, "serverConnectionGroupBox");
+            GroupBox status = Find<GroupBox>(sync, "uploadStatusGroupBox");
+            TextBox serverUrl = Find<TextBox>(sync, "syncServerUrlTextBox");
+            TextBox token = Find<TextBox>(sync, "syncApiTokenTextBox");
+            CheckBox enabled = Find<CheckBox>(sync, "syncEnabledCheckBox");
+            CheckBox testHttp = Find<CheckBox>(sync, "syncAllowHttpTestServerCheckBox");
+            Button save = Find<Button>(sync, "saveSyncSettingsButton");
+            Button testServer = Find<Button>(sync, "testServerButton");
+            Button upload = Find<Button>(sync, "syncPendingRecordingsButton");
+
+            Assert.True(connection.Visible && connection.Height >= 180);
+            Assert.True(status.Visible && status.Height >= 220);
+            Assert.True(serverUrl.Visible && serverUrl.Width >= 500);
+            Assert.True(token.Visible && token.UseSystemPasswordChar && token.Text.Length == 0);
+            Assert.True(enabled.Visible && testHttp.Visible && save.Visible);
+            Assert.True(testServer.Visible && testServer.Height > 0);
+            Assert.True(upload.Visible && upload.Height > 0);
+            Assert.True(Find<Label>(sync, "syncPendingCountLabel").Visible);
+            Assert.True(Find<Label>(sync, "syncCurrentStateLabel").Visible);
+            Assert.True(Find<Label>(sync, "syncLastAttemptLabel").Visible);
+            Assert.True(Find<Label>(sync, "syncLastResultLabel").Visible);
+            Assert.True(Find<Label>(sync, "syncLastErrorLabel").Visible);
+            Assert.NotNull(GetPrivateField<OtmrManualSyncService>(sync, "_manualSyncService"));
+            Assert.False(GetPrivateValue<bool>(sync, "_syncBusy"));
+            Assert.StartsWith("Last attempt:", Find<Label>(sync, "syncLastAttemptLabel").Text,
+                StringComparison.Ordinal);
+        });
+    }
+
     [Fact]
     public void VisibleBenchReceivesLoadedAndReplacementCcfWithoutManualRefresh()
     {
@@ -142,7 +446,9 @@ public sealed class MainFormLayoutTests
                     "Hex",
                     "Validation",
                     "OTMR Live",
-                    "OTMR I/O Bench"
+                    "OTMR I/O Bench",
+                    "SERVER SYNC",
+                    "RCM LIVE"
                 }, tabs.TabPages.Cast<TabPage>().Select(page => page.Text));
 
                 foreach (TabPage page in tabs.TabPages)
@@ -605,55 +911,150 @@ public sealed class MainFormLayoutTests
     }
 
     [Fact]
-    public void GenuineLiveFrameUpdatesExplicitlyVerifiedSignalInLiveUi()
+    public void GenuineLiveFrameUpdatesExplicitlyVerifiedSignalInRcmLiveUiThroughExistingLiveStream()
     {
         RunInStaThread(() =>
         {
-            using var form = new MainForm();
-            form.Show();
-            TabControl tabs = Find<TabControl>(form, "tabs");
-            tabs.SelectedIndex = 4;
-            Application.DoEvents();
-
-            OtmrLiveControl live = Find<OtmrLiveControl>(form, "otmrLiveControl");
+            string profilePath = Path.Combine(Path.GetTempPath(), $"current-live-{Guid.NewGuid():N}.json");
             RcmPinProfile pin = RcmVerifiedLiveDecoderTests.VerifiedPin(
                 "A", position: 3, bit: 0, removed: 0x00, applied: 0x01);
+            pin.Testable = false;
+            pin.RcmResult = RcmResultStates.NotTestable;
+            MakePersistableVerified(pin);
             RcmProfile profile = RcmVerifiedLiveDecoderTests.Profile(pin);
-            InvokePrivate(live, "SetActiveRcmProfile", profile);
+            try
+            {
+                RcmProfileJson.SaveAsync(profilePath, profile, DateTimeOffset.UtcNow).GetAwaiter().GetResult();
+                using var form = new MainForm();
+                form.Show();
+                TabControl tabs = Find<TabControl>(form, "tabs");
+                tabs.SelectedIndex = 4;
+                Application.DoEvents();
 
-            var assembler = new OtmrLiveFrameAssembler();
-            OtmrLiveFrame activeFrame = Assert.Single(assembler.Append(
-                new byte[] { 0xFB, 0xFB, 0x38, 0x01, 0xFF }));
-            InvokePrivate(live, "LiveService_FrameReceived", null,
-                new OtmrLiveFrameEventArgs(DateTimeOffset.UtcNow, activeFrame));
-            Application.DoEvents();
+                OtmrLiveControl live = Find<OtmrLiveControl>(form, "otmrLiveControl");
+                OtmrBenchControl bench = Find<OtmrBenchControl>(form, "otmrBenchControl");
+                OtmrRcmLiveControl rcmLive = Find<OtmrRcmLiveControl>(form, "otmrRcmLiveControl");
+                InvokePrivateAsync(bench, "LoadRcmProfileAsync", profilePath, CancellationToken.None);
+                Application.DoEvents();
 
-            DataGridView grid = Find<DataGridView>(live, "decodedSignalsGrid");
-            DataGridViewRow row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
-            Assert.Equal("J1-A", Convert.ToString(row.Cells["decodedPhysicalColumn"].Value));
-            Assert.Equal("Throttle 1", Convert.ToString(row.Cells["decodedFunctionColumn"].Value));
-            Assert.Equal("Card 0 / Ch 0", Convert.ToString(row.Cells["decodedLogicalColumn"].Value));
-            Assert.Equal("ACTIVE", Convert.ToString(row.Cells["decodedStateColumn"].Value));
-            Assert.Contains("pos 3 bit 0 = 1", Convert.ToString(row.Cells["decodedRawColumn"].Value),
-                StringComparison.Ordinal);
-            Assert.Equal("VERIFIED", Convert.ToString(row.Cells["decodedVerificationColumn"].Value));
+                DataGridView grid = Find<DataGridView>(rcmLive, "decodedSignalsGrid");
+                DataGridViewRow row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+                Assert.Equal("UNKNOWN", Convert.ToString(row.Cells["decodedStateColumn"].Value));
+                Assert.Contains("Awaiting", Convert.ToString(row.Cells["decodedRawColumn"].Value),
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("DISCONNECTED", Find<Label>(rcmLive, "liveStateStatusLabel").Text,
+                    StringComparison.Ordinal);
+                Assert.Contains("Verified mappings: 1", Find<Label>(rcmLive, "verifiedMappingsStatusLabel").Text,
+                    StringComparison.Ordinal);
 
-            OtmrLiveFrame inactiveFrame = Assert.Single(assembler.Append(
-                new byte[] { 0xFB, 0xFB, 0x38, 0x00, 0xFF }));
-            InvokePrivate(live, "LiveService_FrameReceived", null,
-                new OtmrLiveFrameEventArgs(DateTimeOffset.UtcNow, inactiveFrame));
-            Application.DoEvents();
+                var assembler = new OtmrLiveFrameAssembler();
+                OtmrLiveFrame activeFrame = Assert.Single(assembler.Append(
+                    new byte[] { 0xFB, 0xFB, 0x38, 0x01, 0xFF }));
+                InvokePrivate(live, "LiveService_FrameReceived", null,
+                    new OtmrLiveFrameEventArgs(DateTimeOffset.UtcNow, activeFrame));
+                Application.DoEvents();
 
-            row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
-            Assert.Equal("INACTIVE", Convert.ToString(row.Cells["decodedStateColumn"].Value));
-            Assert.Contains("pos 3 bit 0 = 0", Convert.ToString(row.Cells["decodedRawColumn"].Value),
-                StringComparison.Ordinal);
+                tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == "RCM LIVE");
+                Application.DoEvents();
+                row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+                Assert.Equal("J1-A", Convert.ToString(row.Cells["decodedPhysicalColumn"].Value));
+                Assert.Equal("Throttle 1", Convert.ToString(row.Cells["decodedFunctionColumn"].Value));
+                Assert.Equal("Card 0 / Ch 0", Convert.ToString(row.Cells["decodedLogicalColumn"].Value));
+                Assert.Equal("ACTIVE", Convert.ToString(row.Cells["decodedStateColumn"].Value));
+                Assert.Contains("pos 3 bit 0 = 1", Convert.ToString(row.Cells["decodedRawColumn"].Value),
+                    StringComparison.Ordinal);
+                Assert.Equal("VERIFIED", Convert.ToString(row.Cells["decodedVerificationColumn"].Value));
+
+                OtmrLiveFrame inactiveFrame = Assert.Single(assembler.Append(
+                    new byte[] { 0xFB, 0xFB, 0x38, 0x00, 0xFF }));
+                InvokePrivate(live, "LiveService_FrameReceived", null,
+                    new OtmrLiveFrameEventArgs(DateTimeOffset.UtcNow, inactiveFrame));
+                Application.DoEvents();
+
+                row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+                Assert.Equal("INACTIVE", Convert.ToString(row.Cells["decodedStateColumn"].Value));
+                Assert.Contains("pos 3 bit 0 = 0", Convert.ToString(row.Cells["decodedRawColumn"].Value),
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                if (File.Exists(profilePath)) File.Delete(profilePath);
+            }
         });
     }
 
     private static void InvokeLoadCcf(MainForm form, string path) =>
         typeof(MainForm).GetMethod("LoadCcf", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(form, new object[] { path });
+
+    private static RcmProfile ProfileWithVerifiedMappings(string prefix, int count)
+    {
+        RcmPinProfile[] pins = Enumerable.Range(0, count)
+            .Select(index =>
+            {
+                RcmPinProfile pin = RcmVerifiedLiveDecoderTests.VerifiedPin(
+                    $"{prefix}{index}", position: 3 + index, bit: 0, removed: 0x00, applied: 0x01);
+                pin.Function = $"{prefix} Function {index}";
+                pin.CcfReference!.LogicalChannel = index;
+                pin.DecoderVerification.Function = pin.Function;
+                pin.DecoderVerification.ExpectedCcf.LogicalChannel = index;
+                MakePersistableVerified(pin);
+                return pin;
+            })
+            .ToArray();
+        RcmProfile profile = RcmVerifiedLiveDecoderTests.Profile(pins);
+        profile.SourceCcfFilename = $"{prefix}-source.ccf";
+        return profile;
+    }
+
+    private static void MakePersistableVerified(RcmPinProfile pin)
+    {
+        RcmObservedTransition observed = pin.DecoderVerification.ObservedMapping!;
+        pin.VerificationRuns.Clear();
+        for (int runNumber = 1; runNumber <= 3; runNumber++)
+        {
+            var run = new RcmPhysicalVerificationRun
+            {
+                RunNumber = runNumber,
+                StartedAt = DateTimeOffset.UtcNow.AddMinutes(runNumber),
+                CompletedAt = DateTimeOffset.UtcNow.AddMinutes(runNumber).AddSeconds(6),
+                Connector = pin.Connector,
+                Pin = pin.Pin,
+                Function = pin.Function,
+                ExpectedCcf = new RcmExpectedMappingSnapshot
+                {
+                    LogicalCard = pin.CcfReference!.LogicalCard,
+                    LogicalChannel = pin.CcfReference.LogicalChannel,
+                    RecordA = pin.CcfReference.RecordA,
+                    RecordB = pin.CcfReference.RecordB
+                },
+                CandidateTransitions = new List<RcmObservedTransition>
+                {
+                    new()
+                    {
+                        RawPosition = observed.RawPosition,
+                        Bit = observed.Bit,
+                        RemovedValue = observed.RemovedValue,
+                        AppliedValue = observed.AppliedValue,
+                        TransitionPolarity = observed.TransitionPolarity
+                    }
+                }
+            };
+            pin.VerificationRuns.Add(run);
+        }
+        pin.DecoderVerification.RequiredRunCount = 3;
+        pin.DecoderVerification.SuccessfulRepetitionCount = 3;
+        pin.DecoderVerification.QualifyingRunIds = pin.VerificationRuns.Select(run => run.RunId).ToList();
+        pin.Comparison.DecoderVerified = true;
+    }
+
+    private static void InvokePrivateAsync(object target, string name, params object?[] arguments)
+    {
+        MethodInfo method = target.GetType().GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(candidate => candidate.Name == name && candidate.GetParameters().Length == arguments.Length);
+        Task task = Assert.IsAssignableFrom<Task>(method.Invoke(target, arguments));
+        task.GetAwaiter().GetResult();
+    }
 
     private static void InvokePrivate(object target, string name, params object?[] arguments)
     {
@@ -665,6 +1066,9 @@ public sealed class MainFormLayoutTests
     private static T GetPrivateField<T>(object target, string name) where T : class =>
         (T)(target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)
             ?? throw new Xunit.Sdk.XunitException($"Field '{name}' is null."));
+
+    private static T GetPrivateValue<T>(object target, string name) where T : struct =>
+        Assert.IsType<T>(target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target));
 
     private static T Find<T>(Control root, string name) where T : Control =>
         root.Controls.Find(name, true).OfType<T>().SingleOrDefault()

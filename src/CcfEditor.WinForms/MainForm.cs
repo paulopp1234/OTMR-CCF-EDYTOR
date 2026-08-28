@@ -27,6 +27,7 @@ public partial class MainForm : Form
         hexGrid.DataSource = _hexBinding;
         otmrLiveControl.SetCurrentCcf(_document);
         otmrBenchControl.SetCurrentCcf(_document);
+        otmrBenchControl.CurrentRcmProfileChanged += OtmrBenchControl_CurrentRcmProfileChanged;
     }
 
     private void OpenMenuItem_Click(object? sender, EventArgs e)
@@ -411,9 +412,10 @@ public partial class MainForm : Form
                 {
                     recordsGrid.ClearSelection();
                     recordsGrid.Rows[i].Selected = true;
-                    recordsGrid.CurrentCell = recordsGrid.Rows[i].Cells[0];
-                    if (i >= 0 && i < recordsGrid.RowCount)
-                        recordsGrid.FirstDisplayedScrollingRowIndex = i;
+                    DataGridViewCell firstCell = recordsGrid.Rows[i].Cells[0];
+                    if (DataGridViewViewport.CanDisplayRows(recordsGrid) && recordsGrid.Rows[i].Visible && firstCell.Visible)
+                        recordsGrid.CurrentCell = firstCell;
+                    DataGridViewViewport.TryScrollToRow(recordsGrid, i);
                     break;
                 }
             }
@@ -459,8 +461,7 @@ public partial class MainForm : Form
                 firstHighlightedRow = gridRow.Index;
         }
 
-        if (firstHighlightedRow >= 0 && firstHighlightedRow < hexGrid.RowCount)
-            hexGrid.FirstDisplayedScrollingRowIndex = firstHighlightedRow;
+        DataGridViewViewport.TryScrollToRow(hexGrid, firstHighlightedRow);
     }
 
     private void PopulateValidation(CcfDocument document)

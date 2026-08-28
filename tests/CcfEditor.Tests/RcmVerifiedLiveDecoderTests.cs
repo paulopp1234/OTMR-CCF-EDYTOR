@@ -23,6 +23,101 @@ public sealed class RcmVerifiedLiveDecoderTests
         Assert.Equal(RcmVerificationStates.Verified, applied.VerificationStatus);
     }
 
+    [Fact]
+    public void VerifiedMappingsCanBeDescribedBeforeAnyLiveFrame()
+    {
+        RcmProfile profile = Profile(
+            VerifiedPin("A", 3, bit: 0, removed: 0x00, applied: 0x01),
+            VerifiedPin("B", 4, bit: 1, removed: 0x00, applied: 0x02));
+
+        IReadOnlyList<RcmVerifiedLiveSignal> mappings = _decoder.DescribeVerifiedMappings(profile);
+
+        Assert.Equal(2, mappings.Count);
+        Assert.All(mappings, mapping =>
+        {
+            Assert.Equal(RcmDecodedElectricalState.Unknown, mapping.State);
+            Assert.Null(mapping.RawObservedValue);
+            Assert.Equal(RcmVerificationStates.Verified, mapping.VerificationStatus);
+            Assert.Contains("Awaiting", mapping.Detail, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void ExplicitVerificationIsIndependentOfBenchTestabilityWorkflow()
+    {
+        RcmPinProfile pin = VerifiedPin("A", 3, bit: 0, removed: 0x00, applied: 0x01);
+        pin.Testable = false;
+        pin.RcmResult = RcmResultStates.NotTestable;
+        pin.Comparison.DecoderVerified = false;
+        RcmProfile profile = Profile(pin);
+
+        RcmVerifiedLiveSignal beforeLiveData = Assert.Single(_decoder.DescribeVerifiedMappings(profile));
+        RcmVerifiedLiveSignal afterLiveData = Assert.Single(_decoder.Decode(Frame(0x01), profile));
+
+        Assert.True(RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(pin));
+        Assert.Equal(RcmDecodedElectricalState.Unknown, beforeLiveData.State);
+        Assert.Null(beforeLiveData.RawObservedValue);
+        Assert.Equal(RcmDecodedElectricalState.Active, afterLiveData.State);
+        Assert.Equal(0x01, afterLiveData.RawObservedValue);
+    }
+
+    [Fact]
+    public void MixedProfileExposesOnlyExplicitValidVerifiedMappings()
+    {
+        RcmPinProfile verified = VerifiedPin("A", 3, bit: 0, removed: 0, applied: 1);
+        verified.Testable = false;
+        verified.RcmResult = RcmResultStates.NotTestable;
+        RcmPinProfile unverified = VerifiedPin("B", 4, bit: 0, removed: 0, applied: 1);
+        unverified.DecoderVerification.Status = RcmVerificationStates.NotVerified;
+        RcmPinProfile conflict = VerifiedPin("C", 5, bit: 0, removed: 0, applied: 1);
+        conflict.DecoderVerification.Status = RcmVerificationStates.Conflict;
+        RcmPinProfile invalid = VerifiedPin("D", 6, bit: 0, removed: 0, applied: 0);
+
+        RcmVerifiedLiveSignal mapping = Assert.Single(
+            _decoder.DescribeVerifiedMappings(Profile(verified, unverified, conflict, invalid)));
+
+        Assert.Equal("A", mapping.Pin);
+    }
+
+    [Fact]
+    public async Task LoadedLegacyShapedProfileExposesAllFiftyExplicitVerifiedMappings()
+    {
+        RcmPinProfile[] pins = Enumerable.Range(0, 50)
+            .Select(index =>
+            {
+                RcmPinProfile pin = VerifiedPin($"P{index + 1:D2}", 3, bit: index % 8, removed: 0, applied: 1 << (index % 8));
+                pin.Function = $"Verified function {index + 1}";
+                pin.Testable = false;
+                pin.RcmResult = RcmResultStates.NotTestable;
+                pin.CcfReference!.LogicalChannel = index;
+                pin.DecoderVerification.Function = pin.Function;
+                pin.DecoderVerification.ExpectedCcf.LogicalChannel = index;
+                MakePersistableVerified(pin);
+                return pin;
+            })
+            .ToArray();
+        string path = Path.Combine(Path.GetTempPath(), $"legacy-verified-{Guid.NewGuid():N}.json");
+        try
+        {
+            await RcmProfileJson.SaveAsync(path, Profile(pins), DateTimeOffset.UtcNow);
+            RcmProfile loaded = await RcmProfileJson.LoadAsync(path);
+
+            IReadOnlyList<RcmVerifiedLiveSignal> mappings = _decoder.DescribeVerifiedMappings(loaded);
+
+            Assert.Equal(50, mappings.Count);
+            Assert.All(mappings, mapping => Assert.Equal(RcmDecodedElectricalState.Unknown, mapping.State));
+            Assert.All(loaded.Pins, pin =>
+            {
+                Assert.False(pin.Testable);
+                Assert.Equal(RcmResultStates.NotTestable, pin.RcmResult);
+            });
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData(RcmVerificationStates.CandidateFound)]
     [InlineData(RcmVerificationStates.Eligible)]
@@ -192,5 +287,43 @@ public sealed class RcmVerifiedLiveDecoderTests
         }
         RcmMappingVerificationService.VerifyMapping(pin, DateTimeOffset.UtcNow.AddHours(1));
         return Profile(pin);
+    }
+
+    private static void MakePersistableVerified(RcmPinProfile pin)
+    {
+        RcmObservedTransition observed = pin.DecoderVerification.ObservedMapping!;
+        pin.VerificationRuns = Enumerable.Range(1, 3)
+            .Select(runNumber => new RcmPhysicalVerificationRun
+            {
+                RunNumber = runNumber,
+                StartedAt = DateTimeOffset.UtcNow.AddMinutes(runNumber),
+                CompletedAt = DateTimeOffset.UtcNow.AddMinutes(runNumber).AddSeconds(6),
+                Connector = pin.Connector,
+                Pin = pin.Pin,
+                Function = pin.Function,
+                ExpectedCcf = new RcmExpectedMappingSnapshot
+                {
+                    LogicalCard = pin.CcfReference!.LogicalCard,
+                    LogicalChannel = pin.CcfReference.LogicalChannel,
+                    RecordA = pin.CcfReference.RecordA,
+                    RecordB = pin.CcfReference.RecordB
+                },
+                CandidateTransitions = new List<RcmObservedTransition>
+                {
+                    new()
+                    {
+                        RawPosition = observed.RawPosition,
+                        Bit = observed.Bit,
+                        RemovedValue = observed.RemovedValue,
+                        AppliedValue = observed.AppliedValue,
+                        TransitionPolarity = observed.TransitionPolarity
+                    }
+                }
+            })
+            .ToList();
+        pin.DecoderVerification.RequiredRunCount = 3;
+        pin.DecoderVerification.SuccessfulRepetitionCount = 3;
+        pin.DecoderVerification.QualifyingRunIds = pin.VerificationRuns.Select(run => run.RunId).ToList();
+        pin.Comparison.DecoderVerified = true;
     }
 }

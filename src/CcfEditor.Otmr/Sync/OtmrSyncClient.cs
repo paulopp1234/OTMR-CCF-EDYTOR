@@ -8,11 +8,14 @@ namespace CcfEditor.Otmr.Sync;
 
 public sealed class OtmrSyncOptions
 {
+    public const string KnownInsecureDigitalOceanTestServer = "http://104.248.226.215/";
+
     public bool Enabled { get; init; }
     public Uri? BaseUrl { get; init; }
     public string? ApiToken { get; init; }
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(60);
     public bool AllowInsecureLocalhostForTests { get; init; }
+    public bool AllowInsecureKnownTestServer { get; init; }
 
     public void Validate()
     {
@@ -22,7 +25,14 @@ public sealed class OtmrSyncOptions
             throw new InvalidOperationException("An absolute OTMR server base URL is required.");
         bool allowedHttpTest = AllowInsecureLocalhostForTests && BaseUrl.IsLoopback &&
                                BaseUrl.Scheme == Uri.UriSchemeHttp;
-        if (BaseUrl.Scheme != Uri.UriSchemeHttps && !allowedHttpTest)
+        bool allowedKnownTestServer = AllowInsecureKnownTestServer &&
+                                      Uri.Compare(
+                                          BaseUrl,
+                                          new Uri(KnownInsecureDigitalOceanTestServer),
+                                          UriComponents.HttpRequestUrl,
+                                          UriFormat.SafeUnescaped,
+                                          StringComparison.OrdinalIgnoreCase) == 0;
+        if (BaseUrl.Scheme != Uri.UriSchemeHttps && !allowedHttpTest && !allowedKnownTestServer)
             throw new InvalidOperationException("The OTMR server base URL must use HTTPS.");
         if (string.IsNullOrWhiteSpace(ApiToken))
             throw new InvalidOperationException("An externally supplied OTMR API token is required.");

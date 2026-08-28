@@ -28,8 +28,12 @@ partial class MainForm
     private TabPage validationTab = null!;
     private TabPage otmrLiveTab = null!;
     private TabPage otmrBenchTab = null!;
+    private TabPage serverSyncTab = null!;
+    private TabPage rcmLiveTab = null!;
     private OtmrLiveControl otmrLiveControl = null!;
     private OtmrBenchControl otmrBenchControl = null!;
+    private OtmrServerSyncControl otmrServerSyncControl = null!;
+    private OtmrRcmLiveControl otmrRcmLiveControl = null!;
     private SplitContainer recordsSplit = null!;
     private TableLayoutPanel recordsTopTable = null!;
     private DataGridView recordsGrid = null!;
@@ -171,6 +175,10 @@ partial class MainForm
         otmrLiveControl = new OtmrLiveControl();
         otmrBenchTab = new TabPage();
         otmrBenchControl = new OtmrBenchControl();
+        serverSyncTab = new TabPage();
+        otmrServerSyncControl = new OtmrServerSyncControl();
+        rcmLiveTab = new TabPage();
+        otmrRcmLiveControl = new OtmrRcmLiveControl();
 
         menuStrip.SuspendLayout();
         toolStrip.SuspendLayout();
@@ -192,6 +200,8 @@ partial class MainForm
         validationTab.SuspendLayout();
         otmrLiveTab.SuspendLayout();
         otmrBenchTab.SuspendLayout();
+        serverSyncTab.SuspendLayout();
+        rcmLiveTab.SuspendLayout();
         SuspendLayout();
 
         menuStrip.Items.AddRange(new ToolStripItem[] { fileMenu });
@@ -244,7 +254,7 @@ partial class MainForm
         statusStrip.Name = "statusStrip";
         statusStrip.Size = new Size(1500, 22);
         fileStatusLabel.Name = "fileStatusLabel";
-        fileStatusLabel.Text = "No CCF loaded | v0.2 test / OTMR M1 + I/O Bench";
+        fileStatusLabel.Text = "No CCF loaded | v0.3.0 test / OTMR M1 + I/O Bench";
         springStatusLabel.Name = "springStatusLabel";
         springStatusLabel.Spring = true;
         shaStatusLabel.Name = "shaStatusLabel";
@@ -256,6 +266,8 @@ partial class MainForm
         tabs.Controls.Add(validationTab);
         tabs.Controls.Add(otmrLiveTab);
         tabs.Controls.Add(otmrBenchTab);
+        tabs.Controls.Add(serverSyncTab);
+        tabs.Controls.Add(rcmLiveTab);
         tabs.Dock = DockStyle.Fill;
         tabs.Location = new Point(0, 49);
         tabs.Name = "tabs";
@@ -479,6 +491,32 @@ partial class MainForm
         otmrBenchControl.Name = "otmrBenchControl";
         otmrBenchControl.Size = new Size(1486, 795);
 
+        serverSyncTab.Controls.Add(otmrServerSyncControl);
+        serverSyncTab.Location = new Point(4, 24);
+        serverSyncTab.Name = "serverSyncTab";
+        serverSyncTab.Padding = new Padding(3);
+        serverSyncTab.Size = new Size(1492, 801);
+        serverSyncTab.TabIndex = 6;
+        serverSyncTab.Text = "SERVER SYNC";
+        serverSyncTab.UseVisualStyleBackColor = true;
+        otmrServerSyncControl.Dock = DockStyle.Fill;
+        otmrServerSyncControl.Location = new Point(3, 3);
+        otmrServerSyncControl.Name = "otmrServerSyncControl";
+        otmrServerSyncControl.Size = new Size(1486, 795);
+
+        rcmLiveTab.Controls.Add(otmrRcmLiveControl);
+        rcmLiveTab.Location = new Point(4, 24);
+        rcmLiveTab.Name = "rcmLiveTab";
+        rcmLiveTab.Padding = new Padding(3);
+        rcmLiveTab.Size = new Size(1492, 801);
+        rcmLiveTab.TabIndex = 7;
+        rcmLiveTab.Text = "RCM LIVE";
+        rcmLiveTab.UseVisualStyleBackColor = true;
+        otmrRcmLiveControl.Dock = DockStyle.Fill;
+        otmrRcmLiveControl.Location = new Point(3, 3);
+        otmrRcmLiveControl.Name = "otmrRcmLiveControl";
+        otmrRcmLiveControl.Size = new Size(1486, 795);
+
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         ClientSize = new Size(1500, 900);
@@ -490,7 +528,7 @@ partial class MainForm
         MinimumSize = new Size(1100, 700);
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "OTMR CCF Editor / Creator v0.2 - test OTMR M1 + I/O Bench";
+        Text = "OTMR CCF Editor / Creator v0.3.0 - test OTMR M1 + I/O Bench";
         FormClosing += MainForm_FormClosing;
 
         menuStrip.ResumeLayout(false); menuStrip.PerformLayout();
@@ -508,6 +546,8 @@ partial class MainForm
         validationTab.ResumeLayout(true);
         otmrLiveTab.ResumeLayout(true);
         otmrBenchTab.ResumeLayout(true);
+        serverSyncTab.ResumeLayout(true);
+        rcmLiveTab.ResumeLayout(true);
         tabs.ResumeLayout(true);
         ResumeLayout(true);
         PerformLayout();

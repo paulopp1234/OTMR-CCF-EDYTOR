@@ -35,6 +35,7 @@ public partial class MainForm
             _recordingStore = store;
             otmrLiveControl.SetRecordingStore(store);
             otmrBenchControl.SetRecordingStore(store);
+            otmrServerSyncControl.SetRecordingStore(store);
             store = null;
         }
         catch (Exception ex)
@@ -95,6 +96,7 @@ public partial class MainForm
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        otmrBenchControl.CurrentRcmProfileChanged -= OtmrBenchControl_CurrentRcmProfileChanged;
         if (_databaseTabLayoutHookInstalled)
         {
             tabs.SelectedIndexChanged -= DatabaseTabs_SelectedIndexChanged;

@@ -1,7 +1,6 @@
 using CcfEditor.Core;
 using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
-using CcfEditor.Otmr.Rcm;
 using CcfEditor.Otmr.Transport;
 
 namespace CcfEditor.WinForms;
@@ -15,10 +14,9 @@ public partial class OtmrLiveControl : UserControl
     private CancellationTokenSource? _startCancellation;
     private string? _connectedPortName;
     private int _assembledFrameCount;
+    private bool _captureScrollPending;
+    private bool _captureScrollInvokeQueued;
     private CcfDocument? _selectedCcf;
-    private readonly RcmVerifiedLiveDecoder _verifiedLiveDecoder = new();
-    private RcmProfile? _activeRcmProfile;
-    private IReadOnlyList<RcmVerifiedLiveSignal> _decodedSignals = Array.Empty<RcmVerifiedLiveSignal>();
 
     internal OtmrLiveState State => _liveService.State;
 
@@ -38,6 +36,9 @@ public partial class OtmrLiveControl : UserControl
         RefreshPorts();
         UpdateStateUi();
         RefreshCaptureGrid();
+        captureGrid.Layout += CaptureGrid_LayoutAvailable;
+        captureGrid.SizeChanged += CaptureGrid_LayoutAvailable;
+        captureGrid.VisibleChanged += CaptureGrid_LayoutAvailable;
     }
 
     internal void SetCurrentCcf(CcfDocument? document)
@@ -45,16 +46,6 @@ public partial class OtmrLiveControl : UserControl
         _selectedCcf = document;
         UpdateStateUi();
     }
-
-    internal void SetActiveRcmProfile(RcmProfile? profile)
-    {
-        _activeRcmProfile = profile;
-        _decodedSignals = Array.Empty<RcmVerifiedLiveSignal>();
-        RefreshDecodedSignalsGrid();
-    }
-
-    internal IReadOnlyList<RcmVerifiedLiveSignal> GetDecodedSignalSnapshot() =>
-        _decodedSignals.ToArray();
 
     private void RefreshPortsButton_Click(object? sender, EventArgs e) => RefreshPorts();
 
@@ -307,8 +298,7 @@ public partial class OtmrLiveControl : UserControl
             if (EntryMatchesCurrentFilter(e.Entry))
             {
                 AddCaptureRow(e.Entry);
-                if (captureGrid.Rows.Count > 0)
-                    captureGrid.FirstDisplayedScrollingRowIndex = captureGrid.Rows.Count - 1;
+                RequestCaptureScrollToLastRow();
             }
 
             UpdateCaptureCount(_liveService.GetCaptureSnapshot().Count);
@@ -361,8 +351,6 @@ public partial class OtmrLiveControl : UserControl
         void ReportFrame()
         {
             _assembledFrameCount++;
-            _decodedSignals = _verifiedLiveDecoder.Decode(e.Frame, _activeRcmProfile);
-            RefreshDecodedSignalsGrid();
             statusLabel.Text =
                 $"Complete RX frame #{_assembledFrameCount}: {e.Frame.Length} bytes | {e.Frame.Hex}";
             (FindForm() as MainForm)?.ReportOtmrLiveFrame(e.Timestamp, e.Frame);
@@ -384,51 +372,6 @@ public partial class OtmrLiveControl : UserControl
             BeginInvoke((Action)Update);
         else
             Update();
-    }
-
-    private void RefreshDecodedSignalsGrid()
-    {
-        if (decodedSignalsGrid is null || decodedSignalsStatusLabel is null)
-            return;
-
-        decodedSignalsGrid.Rows.Clear();
-        foreach (RcmVerifiedLiveSignal signal in _decodedSignals)
-        {
-            string physical = $"{signal.Connector}-{signal.Pin}";
-            string logical = signal.LogicalCard.HasValue && signal.LogicalChannel.HasValue
-                ? $"Card {signal.LogicalCard} / Ch {signal.LogicalChannel}"
-                : "—";
-            string state = signal.State switch
-            {
-                RcmDecodedElectricalState.Active => "ACTIVE",
-                RcmDecodedElectricalState.Inactive => "INACTIVE",
-                _ => "UNKNOWN"
-            };
-            string raw = signal.RawObservedValue.HasValue
-                ? signal.BitIndex.HasValue
-                    ? $"pos {signal.RawPosition} bit {signal.BitIndex} = {signal.ObservedBitValue} (raw {signal.RawObservedValue:X2})"
-                    : $"pos {signal.RawPosition} = {signal.RawObservedValue:X2}"
-                : signal.Detail;
-            int rowIndex = decodedSignalsGrid.Rows.Add(
-                physical,
-                signal.Function,
-                logical,
-                state,
-                raw,
-                "VERIFIED");
-            DataGridViewRow row = decodedSignalsGrid.Rows[rowIndex];
-            row.DefaultCellStyle.ForeColor = signal.State switch
-            {
-                RcmDecodedElectricalState.Active => Color.DarkGreen,
-                RcmDecodedElectricalState.Inactive => SystemColors.ControlText,
-                _ => Color.DarkRed
-            };
-            row.Cells[decodedRawColumn.Index].ToolTipText = signal.Detail;
-        }
-
-        decodedSignalsStatusLabel.Text = _decodedSignals.Count == 0
-            ? "No verified RCM mappings available for decoded live signals."
-            : $"Decoded {_decodedSignals.Count} explicitly verified RCM mapping(s) from the latest genuine live frame.";
     }
 
     private void LiveService_DiagnosticAdded(object? sender, OtmrProtocolDiagnosticEventArgs e)
@@ -467,8 +410,41 @@ public partial class OtmrLiveControl : UserControl
 
         UpdateCaptureCount(snapshot.Count);
 
-        if (captureGrid.Rows.Count > 0)
-            captureGrid.FirstDisplayedScrollingRowIndex = captureGrid.Rows.Count - 1;
+        RequestCaptureScrollToLastRow();
+    }
+
+    private void RequestCaptureScrollToLastRow()
+    {
+        if (_closing || captureGrid.IsDisposed || captureGrid.Rows.Count == 0)
+            return;
+
+        int target = captureGrid.Rows.Count - 1;
+        if (DataGridViewViewport.TryScrollToRow(captureGrid, target))
+        {
+            _captureScrollPending = false;
+            return;
+        }
+
+        _captureScrollPending = true;
+        if (_captureScrollInvokeQueued || !captureGrid.IsHandleCreated || captureGrid.Disposing)
+            return;
+
+        _captureScrollInvokeQueued = true;
+        BeginInvoke((Action)(() =>
+        {
+            _captureScrollInvokeQueued = false;
+            TryCompletePendingCaptureScroll();
+        }));
+    }
+
+    private void CaptureGrid_LayoutAvailable(object? sender, EventArgs e) => TryCompletePendingCaptureScroll();
+
+    private void TryCompletePendingCaptureScroll()
+    {
+        if (!_captureScrollPending || _closing || captureGrid.IsDisposed || captureGrid.Rows.Count == 0)
+            return;
+        if (DataGridViewViewport.TryScrollToRow(captureGrid, captureGrid.Rows.Count - 1))
+            _captureScrollPending = false;
     }
 
     private void AddCaptureRow(OtmrCaptureEntry entry)

@@ -198,9 +198,9 @@ public partial class OtmrBenchControl : UserControl
             MessageBox.Show(this, "Load a CCF before creating an RCM profile.", "RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        _rcmProfile = RcmProfileFactory.CreateFromCcf(_document, "Class 171", DateTimeOffset.Now);
-        _rcmProfilePath = null;
-        (FindForm() as MainForm)?.ReportActiveRcmProfileChanged(_rcmProfile);
+        SetCurrentRcmProfile(
+            RcmProfileFactory.CreateFromCcf(_document, "Class 171", DateTimeOffset.Now),
+            profilePath: null);
         PopulateConnectors();
         RenderTable();
         UpdateCcfStatus();
@@ -223,16 +223,10 @@ public partial class OtmrBenchControl : UserControl
 
         try
         {
-            RcmProfile loaded = await RcmProfileJson.LoadAsync(dialog.FileName);
-            _rcmProfile = loaded;
-            _rcmProfilePath = Path.GetFullPath(dialog.FileName);
-            (FindForm() as MainForm)?.ReportActiveRcmProfileChanged(_rcmProfile);
-            PopulateConnectors(resetToAll: true);
-            RenderTable();
-            UpdateCcfStatus();
+            await LoadRcmProfileAsync(dialog.FileName);
             statusLabel.Text =
                 $"RCM profile reopened standalone: {Path.GetFileName(_rcmProfilePath)}. " +
-                $"Progress restored; {RcmProfileJson.GetCcfStatus(loaded, _document)}.";
+                $"Progress restored; {RcmProfileJson.GetCcfStatus(_rcmProfile!, _document)}.";
         }
         catch (Exception ex)
         {
@@ -291,6 +285,7 @@ public partial class OtmrBenchControl : UserControl
         try
         {
             await RcmProfileJson.SaveAsync(_rcmProfilePath, _rcmProfile, DateTimeOffset.Now);
+            NotifyCurrentRcmProfileChanged();
             if (showConfirmation)
                 statusLabel.Text = $"RCM progress saved: {_rcmProfilePath}";
         }
@@ -751,7 +746,9 @@ public partial class OtmrBenchControl : UserControl
         {
             rcmGrid.ClearSelection();
             selectedRow.Selected = true;
-            rcmGrid.CurrentCell = selectedRow.Cells[0];
+            DataGridViewCell firstCell = selectedRow.Cells[0];
+            if (DataGridViewViewport.CanDisplayRows(rcmGrid) && selectedRow.Visible && firstCell.Visible)
+                rcmGrid.CurrentCell = firstCell;
         }
 
         UpdateProgress();
@@ -853,15 +850,17 @@ public partial class OtmrBenchControl : UserControl
         row.Cells[voltageRemovedColumn.Index].Value = FormatCaptureState(pin, RcmElectricalTestState.VoltageRemoved);
         row.Cells[voltageAppliedColumn.Index].Value = FormatCaptureState(pin, RcmElectricalTestState.VoltageApplied24V);
         row.Cells[stateDifferenceColumn.Index].Value = FormatDifference(pin);
-        row.Cells[decoderColumn.Index].Value = pin.DecoderVerification.Status switch
-        {
-            RcmVerificationStates.Verified => "VERIFIED",
-            RcmVerificationStates.Conflict => "CONFLICT",
-            RcmVerificationStates.Eligible => "ELIGIBLE",
-            RcmVerificationStates.CandidateFound =>
-                $"CANDIDATE {pin.DecoderVerification.SuccessfulRepetitionCount}/{pin.DecoderVerification.RequiredRunCount}",
-            _ => "NOT VERIFIED"
-        };
+        row.Cells[decoderColumn.Index].Value =
+            RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(pin)
+                ? "VERIFIED"
+                : pin.DecoderVerification.Status switch
+                {
+                    RcmVerificationStates.Conflict => "CONFLICT",
+                    RcmVerificationStates.Eligible => "ELIGIBLE",
+                    RcmVerificationStates.CandidateFound =>
+                        $"CANDIDATE {pin.DecoderVerification.SuccessfulRepetitionCount}/{pin.DecoderVerification.RequiredRunCount}",
+                    _ => "NOT VERIFIED"
+                };
         row.Cells[rcmResultColumn.Index].Value = pin.RcmResult;
         ApplyRowStyle(row, pin);
     }
@@ -1095,14 +1094,16 @@ public partial class OtmrBenchControl : UserControl
 
     private void UpdateProgress()
     {
-        string decoderStatus = SelectedProfilePin()?.DecoderVerification.Status switch
-        {
-            RcmVerificationStates.Verified => "VERIFIED",
-            RcmVerificationStates.Conflict => "VERIFICATION CONFLICT",
-            RcmVerificationStates.Eligible => "ELIGIBLE — CONFIRMATION REQUIRED",
-            RcmVerificationStates.CandidateFound => "CANDIDATE — REPEAT TEST",
-            _ => "NOT VERIFIED"
-        };
+        RcmPinProfile? selectedPin = SelectedProfilePin();
+        string decoderStatus = RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(selectedPin)
+            ? "VERIFIED"
+            : selectedPin?.DecoderVerification.Status switch
+            {
+                RcmVerificationStates.Conflict => "VERIFICATION CONFLICT",
+                RcmVerificationStates.Eligible => "ELIGIBLE — CONFIRMATION REQUIRED",
+                RcmVerificationStates.CandidateFound => "CANDIDATE — REPEAT TEST",
+                _ => "NOT VERIFIED"
+            };
         progressLabel.Text = _rcmProfile is null
             ? "RCM Progress: no profile created/opened"
             : $"Logical CCF inputs: {_rcmProfile.LogicalCcfInputCount:N0} | " +
@@ -1159,10 +1160,14 @@ public partial class OtmrBenchControl : UserControl
             : $"POSITION[{verification.ObservedMapping.RawPosition:D3}] " +
               $"removed={verification.ObservedMapping.RemovedValue:X2}, +24V={verification.ObservedMapping.AppliedValue:X2}, " +
               verification.ObservedMapping.TransitionPolarity;
+        if (RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(pin))
+        {
+            return $"Verification: VERIFIED by physical stimulation ({verification.SuccessfulRepetitionCount} run(s))\r\n" +
+                   $"Observed: {candidate}";
+        }
+
         return verification.Status switch
         {
-            RcmVerificationStates.Verified =>
-                $"Verification: VERIFIED by physical stimulation ({verification.SuccessfulRepetitionCount} run(s))\r\nObserved: {candidate}",
             RcmVerificationStates.Conflict =>
                 $"Verification: VERIFICATION CONFLICT — NEEDS REVIEW\r\nPreviously verified: {candidate}",
             RcmVerificationStates.Eligible =>
@@ -1243,12 +1248,13 @@ public partial class OtmrBenchControl : UserControl
         string heading = HasGenuineFrames(pin.VoltageRemoved) && HasGenuineFrames(pin.VoltageApplied24V)
             ? $"TEST COMPLETE — {pin.DisplayKey}\r\nCANDIDATE RAW EVIDENCE"
             : "CANDIDATE RAW EVIDENCE";
-        string decoder = pin.DecoderVerification.Status switch
-        {
-            RcmVerificationStates.Verified => "VERIFIED",
-            RcmVerificationStates.Conflict => "VERIFICATION CONFLICT — NEEDS REVIEW",
-            _ => "NOT VERIFIED"
-        };
+        string decoder = RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(pin)
+            ? "VERIFIED"
+            : pin.DecoderVerification.Status switch
+            {
+                RcmVerificationStates.Conflict => "VERIFICATION CONFLICT — NEEDS REVIEW",
+                _ => "NOT VERIFIED"
+            };
         return
             heading + "\r\n\r\n" +
             CaptureSummary("Voltage Removed", pin.VoltageRemoved) + "\r\n\r\n" +

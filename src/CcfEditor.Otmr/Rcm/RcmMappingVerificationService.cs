@@ -2,6 +2,24 @@ namespace CcfEditor.Otmr.Rcm;
 
 public static class RcmMappingVerificationService
 {
+    /// <summary>
+    /// Returns whether the profile contains an explicitly operator-verified mapping
+    /// that the live decoder can safely evaluate. Bench testability/result fields
+    /// describe the capture workflow and are deliberately not part of this policy.
+    /// </summary>
+    public static bool HasExplicitlyVerifiedDecoderMapping(RcmPinProfile? pin)
+    {
+        RcmObservedTransition? mapping = pin?.DecoderVerification?.ObservedMapping;
+        if (pin?.DecoderVerification?.Status != RcmVerificationStates.Verified || mapping is null ||
+            mapping.RawPosition < 0 || mapping.RemovedValue is < 0 or > 255 ||
+            mapping.AppliedValue is < 0 or > 255 || mapping.Bit is < 0 or > 7)
+            return false;
+
+        return mapping.Bit is int bit
+            ? ((mapping.RemovedValue >> bit) & 1) != ((mapping.AppliedValue >> bit) & 1)
+            : mapping.RemovedValue != mapping.AppliedValue;
+    }
+
     public static RcmPhysicalVerificationRun RecordCompletedRun(
         RcmPinProfile pin,
         DateTimeOffset startedAt,

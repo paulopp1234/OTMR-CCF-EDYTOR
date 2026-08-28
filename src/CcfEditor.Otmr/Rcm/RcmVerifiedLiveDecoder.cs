@@ -28,6 +28,23 @@ public sealed class RcmVerifiedLiveSignal
 
 public sealed class RcmVerifiedLiveDecoder
 {
+    public IReadOnlyList<RcmVerifiedLiveSignal> DescribeVerifiedMappings(RcmProfile? profile)
+    {
+        if (profile is null)
+            return Array.Empty<RcmVerifiedLiveSignal>();
+
+        return profile.Pins
+            .Where(RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping)
+            .Select(pin => Result(
+                pin,
+                pin.DecoderVerification.ObservedMapping!,
+                null,
+                null,
+                RcmDecodedElectricalState.Unknown,
+                "Awaiting a genuine complete live frame."))
+            .ToArray();
+    }
+
     public IReadOnlyList<RcmVerifiedLiveSignal> Decode(OtmrLiveFrame frame, RcmProfile? profile)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -40,7 +57,7 @@ public sealed class RcmVerifiedLiveDecoder
             return Array.Empty<RcmVerifiedLiveSignal>();
 
         var results = new List<RcmVerifiedLiveSignal>();
-        foreach (RcmPinProfile pin in profile.Pins.Where(IsExplicitlyVerified))
+        foreach (RcmPinProfile pin in profile.Pins.Where(RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping))
         {
             RcmDecoderVerification verification = pin.DecoderVerification;
             RcmObservedTransition mapping = verification.ObservedMapping!;
@@ -95,12 +112,6 @@ public sealed class RcmVerifiedLiveDecoder
 
     public static bool IsCompleteLiveFrame(ReadOnlySpan<byte> frame) =>
         frame.Length >= 3 && frame[0] == 0xFB && frame[1] == 0xFB && frame[^1] == 0xFF;
-
-    private static bool IsExplicitlyVerified(RcmPinProfile pin) =>
-        pin.PhysicalMappingAssigned && pin.Testable &&
-        pin.DecoderVerification.Status == RcmVerificationStates.Verified &&
-        pin.DecoderVerification.ObservedMapping is not null &&
-        pin.Comparison.DecoderVerified;
 
     private static RcmVerifiedLiveSignal Result(
         RcmPinProfile pin,
