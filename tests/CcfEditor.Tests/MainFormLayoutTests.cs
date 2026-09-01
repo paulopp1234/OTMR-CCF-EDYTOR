@@ -270,25 +270,21 @@ public sealed class MainFormLayoutTests
 
                 InvokePrivateAsync(bench, "LoadRcmProfileAsync", pathA, CancellationToken.None);
                 Application.DoEvents();
-                Assert.Equal(3, grid.Rows.Count);
+                Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
                 Assert.Contains("profile-A.json", profileLabel.Text, StringComparison.Ordinal);
                 Assert.Equal("Verified mappings: 3", countLabel.Text);
-                Assert.All(grid.Rows.Cast<DataGridViewRow>(), row =>
-                {
-                    Assert.Equal("UNKNOWN", Convert.ToString(row.Cells["decodedStateColumn"].Value));
-                    Assert.Contains("Awaiting", Convert.ToString(row.Cells["decodedRawColumn"].Value),
-                        StringComparison.OrdinalIgnoreCase);
-                });
+                Assert.Contains("Observed this session: 0",
+                    Find<Label>(rcm, "decodedSignalsStatusLabel").Text, StringComparison.Ordinal);
+                Assert.Contains("Verified mappings available: 3",
+                    Find<Label>(rcm, "decodedSignalsStatusLabel").Text, StringComparison.Ordinal);
 
                 InvokePrivateAsync(bench, "LoadRcmProfileAsync", pathB, CancellationToken.None);
                 Application.DoEvents();
-                Assert.Equal(7, grid.Rows.Count);
+                Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
                 Assert.Contains("profile-B.json", profileLabel.Text, StringComparison.Ordinal);
                 Assert.DoesNotContain("profile-A.json", profileLabel.Text, StringComparison.Ordinal);
                 Assert.Equal("Verified mappings: 7", countLabel.Text);
-                Assert.All(grid.Rows.Cast<DataGridViewRow>(), row =>
-                    Assert.StartsWith("B", Convert.ToString(row.Cells["decodedPhysicalColumn"].Value)!.Split('-')[1],
-                        StringComparison.Ordinal));
+                rcm.SetSourceConnectionId(Guid.NewGuid().ToString("D"));
 
                 byte[] liveBytes = new byte[11];
                 liveBytes[0] = 0xFB;
@@ -324,7 +320,8 @@ public sealed class MainFormLayoutTests
                 Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
                 Assert.Contains("profile-C.json", profileLabel.Text, StringComparison.Ordinal);
                 Assert.Equal("Verified mappings: 0", countLabel.Text);
-                Assert.Equal("No verified RCM mappings available for decoded live signals.",
+                Assert.Equal(
+                    "Observed this session: 0 | Verified mappings available: 0 | Latest frame decoded: 0",
                     Find<Label>(rcm, "decodedSignalsStatusLabel").Text);
             }
             finally
@@ -1007,14 +1004,12 @@ public sealed class MainFormLayoutTests
                 Application.DoEvents();
 
                 DataGridView grid = Find<DataGridView>(rcmLive, "decodedSignalsGrid");
-                DataGridViewRow row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
-                Assert.Equal("UNKNOWN", Convert.ToString(row.Cells["decodedStateColumn"].Value));
-                Assert.Contains("Awaiting", Convert.ToString(row.Cells["decodedRawColumn"].Value),
-                    StringComparison.OrdinalIgnoreCase);
+                Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
                 Assert.Contains("DISCONNECTED", Find<Label>(rcmLive, "liveStateStatusLabel").Text,
                     StringComparison.Ordinal);
                 Assert.Contains("Verified mappings: 1", Find<Label>(rcmLive, "verifiedMappingsStatusLabel").Text,
                     StringComparison.Ordinal);
+                rcmLive.SetSourceConnectionId(Guid.NewGuid().ToString("D"));
 
                 var assembler = new OtmrLiveFrameAssembler();
                 OtmrLiveFrame activeFrame = Assert.Single(assembler.Append(
@@ -1025,7 +1020,7 @@ public sealed class MainFormLayoutTests
 
                 tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == "RCM LIVE");
                 Application.DoEvents();
-                row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+                DataGridViewRow row = Assert.Single(grid.Rows.Cast<DataGridViewRow>());
                 Assert.Equal("J1-A", Convert.ToString(row.Cells["decodedPhysicalColumn"].Value));
                 Assert.Equal("Throttle 1", Convert.ToString(row.Cells["decodedFunctionColumn"].Value));
                 Assert.Equal("Card 0 / Ch 0", Convert.ToString(row.Cells["decodedLogicalColumn"].Value));

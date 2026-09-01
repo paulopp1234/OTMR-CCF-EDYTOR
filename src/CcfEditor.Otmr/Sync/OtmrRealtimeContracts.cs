@@ -24,7 +24,8 @@ public sealed record OtmrRealtimeUpdateRequest(
     [property: JsonPropertyName("sourceConnectionId")] string? SourceConnectionId,
     [property: JsonPropertyName("rcmProfileFilename")] string? RcmProfileFilename,
     [property: JsonPropertyName("rcmProfileSha256")] string? RcmProfileSha256,
-    [property: JsonPropertyName("signals")] IReadOnlyList<OtmrRealtimeSignalUpdate> Signals);
+    [property: JsonPropertyName("signals")] IReadOnlyList<OtmrRealtimeSignalUpdate> Signals,
+    [property: JsonPropertyName("isSessionStart")] bool IsSessionStart = false);
 
 public sealed record OtmrRealtimeSignalUpdate(
     [property: JsonPropertyName("signalId")] Guid SignalId,

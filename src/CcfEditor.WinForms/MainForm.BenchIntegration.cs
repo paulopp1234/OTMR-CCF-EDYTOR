@@ -9,6 +9,8 @@ public partial class MainForm
 {
     private long _realtimeFramesReceived;
     private long _realtimeFramesDecoded;
+    private string? _realtimeSourceConnectionId;
+    private OtmrRealtimeDecodedState? _pendingRealtimeDecodedState;
 
     internal CcfDocument? GetCurrentCcfForBench() => _document;
 
@@ -29,8 +31,41 @@ public partial class MainForm
 
     internal void ReportOtmrLiveState(OtmrLiveState state)
     {
+        if (state is OtmrLiveState.WaitingForLiveFrames or
+            OtmrLiveState.ConnectedIdle or
+            OtmrLiveState.NotLive or
+            OtmrLiveState.Disconnected or
+            OtmrLiveState.Error)
+        {
+            _realtimeSourceConnectionId = null;
+            _pendingRealtimeDecodedState = null;
+            otmrRcmLiveControl.SetSourceConnectionId(null);
+        }
         otmrBenchControl.SetOtmrLiveState(state);
         otmrRcmLiveControl.SetOtmrLiveState(state);
+    }
+
+    private void OtmrLiveControl_GenuineLiveSessionStarted(
+        object? sender,
+        OtmrLiveSessionStartedEventArgs e)
+    {
+        _realtimeSourceConnectionId = e.SourceConnectionId;
+        otmrRcmLiveControl.SetSourceConnectionId(e.SourceConnectionId);
+        (string? profileFilename, string? profileSha256) =
+            otmrRcmLiveControl.GetActiveProfileIdentity();
+        otmrServerSyncControl.StartRealtimeLiveSession(new OtmrRealtimeSessionStart(
+            ReadRealtimeVehicleIdentifierFromCcf(),
+            e.StartedUtc,
+            e.SourceConnectionId,
+            profileFilename,
+            profileSha256));
+
+        if (_pendingRealtimeDecodedState is not null)
+        {
+            otmrServerSyncControl.PublishVerifiedLiveState(
+                _pendingRealtimeDecodedState with { SourceConnectionId = e.SourceConnectionId });
+            _pendingRealtimeDecodedState = null;
+        }
     }
 
     private void OtmrRcmLiveControl_VerifiedLiveStateDecoded(
@@ -54,19 +89,27 @@ public partial class MainForm
             _realtimeFramesReceived,
             _realtimeFramesDecoded,
             e.ProfileFilename,
-            e.Signals.Count,
+            otmrRcmLiveControl.GetVerifiedMappingCount(),
             vehicleIdentifier,
             decodedStateCount);
         otmrServerSyncControl.ReportRealtimeSourceDiagnostics(diagnostics);
 
-        string? sourceSessionId = _recordingStore?.GetStatus().SessionId?.ToString("D");
-        otmrServerSyncControl.PublishVerifiedLiveState(new OtmrRealtimeDecodedState(
+        var realtimeState = new OtmrRealtimeDecodedState(
             vehicleIdentifier,
             e.TimestampUtc,
-            sourceSessionId,
+            _realtimeSourceConnectionId,
             e.ProfileFilename,
             e.ProfileSha256,
-            e.Signals));
+            e.Signals);
+        if (string.IsNullOrWhiteSpace(_realtimeSourceConnectionId))
+        {
+            _pendingRealtimeDecodedState = otmrLiveControl.State is
+                OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.LiveReady or OtmrLiveState.LiveActive
+                ? realtimeState
+                : null;
+        }
+        else
+            otmrServerSyncControl.PublishVerifiedLiveState(realtimeState);
     }
 
     private void OtmrBenchControl_CurrentRcmProfileChanged(

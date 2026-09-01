@@ -22,6 +22,13 @@ public enum ServerUploadDisposition { Inserted, AlreadyPresent, Conflict }
 
 public sealed record ServerUploadResult(ServerUploadDisposition Disposition, ServerUploadReceipt Receipt);
 
+public enum OtmrLiveUpdateDisposition
+{
+    Accepted,
+    SourceConnectionMismatch,
+    OlderSessionStart
+}
+
 public interface IOtmrUploadPersistenceHook
 {
     Task BeforeReceiptAsync(OtmrApiV1UploadRequest request, CancellationToken cancellationToken);
@@ -41,7 +48,7 @@ public interface IOtmrServerDatabase
     Task<IReadOnlyList<OtmrServerSessionSummary>> GetSessionsAsync(string vehicleIdentifier, int offset, int maximum, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<OtmrHistoricalRecord>> GetRecordsAsync(string vehicleIdentifier, DateTimeOffset fromUtc, DateTimeOffset toUtc, int maximum, CancellationToken cancellationToken = default);
     Task<OtmrVehicleConfiguration?> GetConfigurationAsync(string vehicleIdentifier, CancellationToken cancellationToken = default);
-    Task StoreLiveUpdateAsync(OtmrRealtimeUpdateRequest request, CancellationToken cancellationToken = default);
+    Task<OtmrLiveUpdateDisposition> StoreLiveUpdateAsync(OtmrRealtimeUpdateRequest request, CancellationToken cancellationToken = default);
     Task<OtmrLiveAvailability> GetLiveAsync(string vehicleIdentifier, DateTimeOffset nowUtc, TimeSpan staleAfter, CancellationToken cancellationToken = default);
 }
 
@@ -192,12 +199,47 @@ public sealed class OtmrServerDatabase(
         return new(vehicleIdentifier, Guid.Parse(reader.GetString(0)), ParseUtc(reader.GetString(1)), NullableText(reader, 2), NullableText(reader, 3), NullableText(reader, 4), NullableText(reader, 5), NullableText(reader, 6), NullableText(reader, 7));
     }
 
-    public async Task StoreLiveUpdateAsync(
+    public async Task<OtmrLiveUpdateDisposition> StoreLiveUpdateAsync(
         OtmrRealtimeUpdateRequest request,
         CancellationToken cancellationToken = default)
     {
         await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         using SqliteTransaction transaction = connection.BeginTransaction();
+
+        string? currentSourceConnectionId = null;
+        DateTimeOffset? currentAsOfUtc = null;
+        await using (SqliteCommand current = connection.CreateCommand())
+        {
+            current.Transaction = transaction;
+            current.CommandText = "SELECT source_connection_id, as_of_utc FROM live_vehicle_state WHERE vehicle_identifier=$vehicle;";
+            Add(current, "$vehicle", request.VehicleIdentifier);
+            await using SqliteDataReader reader = await current.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                currentSourceConnectionId = NullableText(reader, 0);
+                currentAsOfUtc = ParseUtc(reader.GetString(1));
+            }
+        }
+
+        bool sourceChanged = !string.Equals(
+            currentSourceConnectionId, request.SourceConnectionId, StringComparison.Ordinal);
+        if (!request.IsSessionStart && (currentAsOfUtc is null || sourceChanged))
+        {
+            transaction.Rollback();
+            return OtmrLiveUpdateDisposition.SourceConnectionMismatch;
+        }
+        if (request.IsSessionStart && sourceChanged && currentAsOfUtc.HasValue &&
+            request.TimestampUtc.ToUniversalTime() < currentAsOfUtc.Value)
+        {
+            transaction.Rollback();
+            return OtmrLiveUpdateDisposition.OlderSessionStart;
+        }
+
+        DateTimeOffset effectiveAsOfUtc = !sourceChanged && currentAsOfUtc.HasValue &&
+                                            currentAsOfUtc.Value > request.TimestampUtc.ToUniversalTime()
+            ? currentAsOfUtc.Value
+            : request.TimestampUtc.ToUniversalTime();
+
         await using (SqliteCommand vehicle = connection.CreateCommand())
         {
             vehicle.Transaction = transaction;
@@ -214,12 +256,21 @@ public sealed class OtmrServerDatabase(
                     rcm_profile_sha256=excluded.rcm_profile_sha256;
                 """;
             Add(vehicle, "$vehicle", request.VehicleIdentifier);
-            Add(vehicle, "$asOf", UtcText(request.TimestampUtc));
+            Add(vehicle, "$asOf", UtcText(effectiveAsOfUtc));
             Add(vehicle, "$received", UtcText(DateTimeOffset.UtcNow));
             Add(vehicle, "$source", request.SourceConnectionId);
             Add(vehicle, "$profileFile", request.RcmProfileFilename);
             Add(vehicle, "$profileHash", request.RcmProfileSha256);
             await vehicle.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (request.IsSessionStart && sourceChanged)
+        {
+            await using SqliteCommand invalidate = connection.CreateCommand();
+            invalidate.Transaction = transaction;
+            invalidate.CommandText = "DELETE FROM live_signal_state WHERE vehicle_identifier=$vehicle;";
+            Add(invalidate, "$vehicle", request.VehicleIdentifier);
+            await invalidate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         foreach (OtmrRealtimeSignalUpdate signal in request.Signals)
@@ -259,6 +310,7 @@ public sealed class OtmrServerDatabase(
             await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         transaction.Commit();
+        return OtmrLiveUpdateDisposition.Accepted;
     }
 
     public async Task<OtmrLiveAvailability> GetLiveAsync(

@@ -26,8 +26,14 @@ public static class OtmrRealtimeServerValidator
             return OtmrRealtimeValidationResult.Invalid("INVALID_TIMESTAMP", "timestampUtc is required.");
         if (request.TimestampUtc.ToUniversalTime() > DateTimeOffset.UtcNow.AddMinutes(5))
             return OtmrRealtimeValidationResult.Invalid("INVALID_TIMESTAMP", "timestampUtc is too far in the future.");
-        if (request.Signals is null || request.Signals.Count == 0 || request.Signals.Count > maximumSignals)
-            return OtmrRealtimeValidationResult.Invalid("INVALID_SIGNALS", $"One to {maximumSignals} verified signal updates are required.");
+        if (string.IsNullOrWhiteSpace(request.SourceConnectionId) || request.SourceConnectionId.Trim().Length > 128)
+            return OtmrRealtimeValidationResult.Invalid("INVALID_SOURCE_CONNECTION", "A valid sourceConnectionId is required.");
+        int minimumSignals = request.IsSessionStart ? 0 : 1;
+        if (request.Signals is null || request.Signals.Count < minimumSignals || request.Signals.Count > maximumSignals)
+            return OtmrRealtimeValidationResult.Invalid("INVALID_SIGNALS",
+                request.IsSessionStart
+                    ? $"Zero to {maximumSignals} verified signal updates are allowed for a live-session start."
+                    : $"One to {maximumSignals} verified signal updates are required.");
         if (request.Signals.GroupBy(signal => signal.SignalId).Any(group => group.Key == Guid.Empty || group.Count() != 1))
             return OtmrRealtimeValidationResult.Invalid("INVALID_SIGNAL_ID", "Signal IDs must be non-empty and unique in each update.");
 

@@ -112,6 +112,7 @@ public partial class MainForm
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         otmrLiveControl.GenuineLiveFrameReceived -= OtmrLiveControl_GenuineLiveFrameReceived;
+        otmrLiveControl.GenuineLiveSessionStarted -= OtmrLiveControl_GenuineLiveSessionStarted;
         otmrBenchControl.CurrentRcmProfileChanged -= OtmrBenchControl_CurrentRcmProfileChanged;
         otmrRcmLiveControl.VerifiedLiveStateDecoded -= OtmrRcmLiveControl_VerifiedLiveStateDecoded;
         if (_databaseTabLayoutHookInstalled)

@@ -15,7 +15,10 @@ public partial class OtmrRcmLiveControl : UserControl
     private RcmProfile? _activeRcmProfile;
     private string? _activeRcmProfilePath;
     private OtmrLiveState _liveState = OtmrLiveState.Disconnected;
-    private IReadOnlyList<RcmVerifiedLiveSignal> _decodedSignals = Array.Empty<RcmVerifiedLiveSignal>();
+    private readonly Dictionary<Guid, CurrentObservedSignal> _currentSessionStates = new();
+    private string? _sourceConnectionId;
+    private int _verifiedMappingCount;
+    private int _latestFrameDecodedCount;
     private DateTimeOffset? _latestFrameTimestamp;
     private string? _activeRcmProfileSha256;
 
@@ -41,8 +44,27 @@ public partial class OtmrRcmLiveControl : UserControl
         _activeRcmProfileSha256 = _activeRcmProfilePath is not null && File.Exists(_activeRcmProfilePath)
             ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(_activeRcmProfilePath)))
             : null;
-        _decodedSignals = _verifiedLiveDecoder.DescribeVerifiedMappings(_activeRcmProfile);
-        _latestFrameTimestamp = null;
+        _verifiedMappingCount = _verifiedLiveDecoder.DescribeVerifiedMappings(_activeRcmProfile).Count;
+        ClearCurrentSessionStates();
+        RefreshStatusAndGrid();
+    }
+
+    internal void SetSourceConnectionId(string? sourceConnectionId)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke((Action)(() => SetSourceConnectionId(sourceConnectionId)));
+            return;
+        }
+
+        string? normalized = string.IsNullOrWhiteSpace(sourceConnectionId)
+            ? null
+            : sourceConnectionId.Trim();
+        if (string.Equals(_sourceConnectionId, normalized, StringComparison.Ordinal))
+            return;
+
+        _sourceConnectionId = normalized;
+        ClearCurrentSessionStates();
         RefreshStatusAndGrid();
     }
 
@@ -70,20 +92,38 @@ public partial class OtmrRcmLiveControl : UserControl
             return;
         }
 
-        _decodedSignals = _verifiedLiveDecoder.Decode(frame, _activeRcmProfile);
+        IReadOnlyList<RcmVerifiedLiveSignal> decodedSignals =
+            _verifiedLiveDecoder.Decode(frame, _activeRcmProfile);
+        _latestFrameDecodedCount = 0;
+        foreach (RcmVerifiedLiveSignal signal in decodedSignals.Where(IsCurrentObservedState))
+        {
+            _latestFrameDecodedCount++;
+            if (_sourceConnectionId is not null)
+            {
+                _currentSessionStates[signal.PinId] = new CurrentObservedSignal(
+                    signal,
+                    timestamp.ToUniversalTime());
+            }
+        }
         _latestFrameTimestamp = timestamp;
         RefreshStatusAndGrid();
         VerifiedLiveStateDecoded?.Invoke(this, new VerifiedLiveStateDecodedEventArgs(
             timestamp,
             _activeRcmProfilePath is null ? null : Path.GetFileName(_activeRcmProfilePath),
             _activeRcmProfileSha256,
-            _decodedSignals.ToArray(),
+            decodedSignals.ToArray(),
             frame,
             completingCaptureEntry));
     }
 
     internal IReadOnlyList<RcmVerifiedLiveSignal> GetDecodedSignalSnapshot() =>
-        _decodedSignals.ToArray();
+        _currentSessionStates.Values.Select(current => current.Signal).ToArray();
+
+    internal (string? Filename, string? Sha256) GetActiveProfileIdentity() =>
+        (_activeRcmProfilePath is null ? null : Path.GetFileName(_activeRcmProfilePath),
+            _activeRcmProfileSha256);
+
+    internal int GetVerifiedMappingCount() => _verifiedMappingCount;
 
     private void RefreshStatusAndGrid()
     {
@@ -99,7 +139,7 @@ public partial class OtmrRcmLiveControl : UserControl
         sourceCcfStatusLabel.Text = _activeRcmProfile is null
             ? "Source CCF: -"
             : $"Source CCF: {_activeRcmProfile.SourceCcfFilename}";
-        verifiedMappingsStatusLabel.Text = $"Verified mappings: {_decodedSignals.Count:N0}" +
+        verifiedMappingsStatusLabel.Text = $"Verified mappings: {_verifiedMappingCount:N0}" +
             (_latestFrameTimestamp is null
                 ? string.Empty
                 : $" | frame {_latestFrameTimestamp.Value.ToLocalTime():HH:mm:ss.fff}");
@@ -118,8 +158,12 @@ public partial class OtmrRcmLiveControl : UserControl
         try
         {
             decodedSignalsGrid.Rows.Clear();
-            foreach (RcmVerifiedLiveSignal signal in _decodedSignals)
+            foreach (CurrentObservedSignal current in _currentSessionStates.Values
+                         .OrderBy(item => item.Signal.Connector, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(item => item.Signal.Pin, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(item => item.Signal.PinId))
             {
+                RcmVerifiedLiveSignal signal = current.Signal;
                 string physical = $"{signal.Connector}-{signal.Pin}";
                 string logical = signal.LogicalCard.HasValue && signal.LogicalChannel.HasValue
                     ? $"Card {signal.LogicalCard} / Ch {signal.LogicalChannel}"
@@ -133,7 +177,11 @@ public partial class OtmrRcmLiveControl : UserControl
                 string raw = signal.RawObservedValue.HasValue
                     ? signal.BitIndex.HasValue
                         ? $"pos {signal.RawPosition} bit {signal.BitIndex} = {signal.ObservedBitValue} (raw {signal.RawObservedValue:X2})"
-                        : $"pos {signal.RawPosition} = {signal.RawObservedValue:X2}"
+                        : signal.ObservedFramePosition.HasValue &&
+                          signal.ObservedFramePosition.Value != signal.RawPosition
+                            ? $"event pos {signal.ObservedFramePosition} = {signal.RawObservedValue:X2} " +
+                              $"(verified record pos {signal.RawPosition})"
+                            : $"pos {signal.RawPosition} = {signal.RawObservedValue:X2}"
                     : signal.Detail;
                 int rowIndex = decodedSignalsGrid.Rows.Add(
                     physical,
@@ -149,7 +197,8 @@ public partial class OtmrRcmLiveControl : UserControl
                     RcmDecodedElectricalState.Inactive => SystemColors.ControlText,
                     _ => Color.DarkRed
                 };
-                row.Cells[decodedRawColumn.Index].ToolTipText = signal.Detail;
+                row.Cells[decodedRawColumn.Index].ToolTipText =
+                    $"{signal.Detail}\r\nLast observed: {current.ObservedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss.fff}";
             }
         }
         finally
@@ -159,12 +208,27 @@ public partial class OtmrRcmLiveControl : UserControl
 
         decodedSignalsStatusLabel.Text = _activeRcmProfile is null
             ? "No RCM profile loaded."
-            : _decodedSignals.Count == 0
-                ? "No verified RCM mappings available for decoded live signals."
-                : _latestFrameTimestamp is null
-                    ? $"{_decodedSignals.Count} explicitly verified RCM mapping(s) loaded; awaiting genuine live data."
-                    : $"Decoded {_decodedSignals.Count} explicitly verified RCM mapping(s) from the latest genuine live frame.";
+            : $"Observed this session: {_currentSessionStates.Count:N0} | " +
+              $"Verified mappings available: {_verifiedMappingCount:N0} | " +
+              $"Latest frame decoded: {_latestFrameDecodedCount:N0}";
     }
+
+    private void ClearCurrentSessionStates()
+    {
+        _currentSessionStates.Clear();
+        _latestFrameDecodedCount = 0;
+        _latestFrameTimestamp = null;
+    }
+
+    private static bool IsCurrentObservedState(RcmVerifiedLiveSignal signal) =>
+        signal.PinId != Guid.Empty &&
+        string.Equals(signal.VerificationStatus, RcmVerificationStates.Verified, StringComparison.Ordinal) &&
+        signal.State is RcmDecodedElectricalState.Active or RcmDecodedElectricalState.Inactive &&
+        signal.RawObservedValue is >= byte.MinValue and <= byte.MaxValue;
+
+    private sealed record CurrentObservedSignal(
+        RcmVerifiedLiveSignal Signal,
+        DateTimeOffset ObservedUtc);
 }
 
 internal sealed class VerifiedLiveStateDecodedEventArgs(

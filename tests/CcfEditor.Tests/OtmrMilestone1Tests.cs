@@ -507,6 +507,65 @@ public sealed class OtmrMilestone1Tests
     }
 
     [Fact]
+    public async Task SuccessfulLiveLoginOwnsOneConnectionIdAndReconnectGetsAnotherIndependentOfRecording()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "otmr-live-connection-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            await using var store = new SqliteOtmrRecordingStore(Path.Combine(folder, "OTMR_RCM.db"));
+            using var transport = new FakeTransport();
+            using var service = new OtmrLiveService(transport, FastStartTiming());
+            var startedConnections = new List<string>();
+            service.LiveSessionStarted += (_, e) => startedConnections.Add(e.SourceConnectionId);
+
+            IReadOnlyDictionary<byte, byte[]> replies = LoadCapturedReplies();
+            await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+            Task firstStart = service.StartLiveAsync(LoadSelectedCcf());
+            await DriveSafeInterrogationAsync(transport, service, replies);
+            await DriveGeneratedReplyStagesAsync(transport, service, replies, firstStart);
+
+            string connectionA = Assert.Single(startedConnections);
+            Assert.True(Guid.TryParse(connectionA, out _));
+            Assert.Equal(connectionA, service.SourceConnectionId);
+            transport.EmitRx(new byte[] { 0xFB, 0xFB, 0x01, 0xFF });
+            transport.EmitRx(new byte[] { 0xFB, 0xFB, 0x00, 0xFF });
+            Assert.Equal(connectionA, service.SourceConnectionId);
+            Assert.Single(startedConnections);
+
+            service.SetRecordingStore(store);
+            await store.StartSessionAsync(new OtmrRecordingSessionContext
+            {
+                SoftwareVersion = "connection-id-lifetime-test",
+                ComPort = "COM7"
+            });
+            Assert.Equal(connectionA, service.SourceConnectionId);
+            await store.StopSessionAsync(DateTimeOffset.UtcNow);
+            Assert.Equal(connectionA, service.SourceConnectionId);
+
+            await service.StopLiveAsync();
+            Assert.Null(service.SourceConnectionId);
+            await service.DisconnectAsync();
+            await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+            Task secondStart = service.StartLiveAsync(LoadSelectedCcf());
+            await DriveSafeInterrogationAsync(transport, service, replies);
+            await DriveGeneratedReplyStagesAsync(transport, service, replies, secondStart);
+
+            Assert.Equal(2, startedConnections.Count);
+            string connectionB = startedConnections[1];
+            Assert.True(Guid.TryParse(connectionB, out _));
+            Assert.NotEqual(connectionA, connectionB);
+            Assert.Equal(connectionB, service.SourceConnectionId);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(folder))
+                Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task FinalLiveCommand_WaitsForCapturedPost01_13Interval()
     {
         IReadOnlyDictionary<byte, byte[]> replies = LoadCapturedReplies();

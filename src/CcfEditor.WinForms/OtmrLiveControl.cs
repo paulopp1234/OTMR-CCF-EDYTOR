@@ -31,6 +31,7 @@ public partial class OtmrLiveControl : UserControl
     /// the control must not rely on a nullable visual-tree lookup for that path.
     /// </summary>
     internal event EventHandler<OtmrLiveFrameEventArgs>? GenuineLiveFrameReceived;
+    internal event EventHandler<OtmrLiveSessionStartedEventArgs>? GenuineLiveSessionStarted;
 
     public OtmrLiveControl()
     {
@@ -43,6 +44,7 @@ public partial class OtmrLiveControl : UserControl
         _liveService.ConnectionChanged += LiveService_ConnectionChanged;
         _liveService.ErrorOccurred += LiveService_ErrorOccurred;
         _liveService.StateChanged += LiveService_StateChanged;
+        _liveService.LiveSessionStarted += LiveService_LiveSessionStarted;
         _liveService.DiagnosticAdded += LiveService_DiagnosticAdded;
 
         RefreshPorts();
@@ -383,6 +385,18 @@ public partial class OtmrLiveControl : UserControl
             ReportFrame();
     }
 
+    private void LiveService_LiveSessionStarted(object? sender, OtmrLiveSessionStartedEventArgs e)
+    {
+        if (_closing || IsDisposed)
+            return;
+
+        void ReportSession() => GenuineLiveSessionStarted?.Invoke(this, e);
+        if (InvokeRequired)
+            BeginInvoke((Action)ReportSession);
+        else
+            ReportSession();
+    }
+
     private void LiveService_ErrorOccurred(object? sender, OtmrLiveErrorEventArgs e)
     {
         if (_closing || IsDisposed)
@@ -526,7 +540,9 @@ public partial class OtmrLiveControl : UserControl
         HashSet<int> mappedPayloadPositions = decodedSignals
             .Where(signal => string.Equals(
                 signal.VerificationStatus, RcmVerificationStates.Verified, StringComparison.Ordinal))
-            .Select(signal => signal.RawPosition)
+            .SelectMany(signal => signal.MatchedFramePositions.Count > 0
+                ? signal.MatchedFramePositions
+                : new[] { signal.ObservedFramePosition ?? signal.RawPosition })
             .Where(position => position >= 2 && position < payloadEndExclusive)
             .ToHashSet();
         _decodedFrameInterpretations[frame] = new DecodedFrameInterpretation(
@@ -778,6 +794,7 @@ public partial class OtmrLiveControl : UserControl
         _liveService.ConnectionChanged -= LiveService_ConnectionChanged;
         _liveService.ErrorOccurred -= LiveService_ErrorOccurred;
         _liveService.StateChanged -= LiveService_StateChanged;
+        _liveService.LiveSessionStarted -= LiveService_LiveSessionStarted;
         _liveService.DiagnosticAdded -= LiveService_DiagnosticAdded;
         _startCancellation?.Cancel();
         _startCancellation?.Dispose();

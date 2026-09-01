@@ -28,6 +28,7 @@ public partial class MainForm : Form
         otmrLiveControl.SetCurrentCcf(_document);
         otmrBenchControl.SetCurrentCcf(_document);
         otmrLiveControl.GenuineLiveFrameReceived += OtmrLiveControl_GenuineLiveFrameReceived;
+        otmrLiveControl.GenuineLiveSessionStarted += OtmrLiveControl_GenuineLiveSessionStarted;
         otmrBenchControl.CurrentRcmProfileChanged += OtmrBenchControl_CurrentRcmProfileChanged;
         otmrRcmLiveControl.VerifiedLiveStateDecoded += OtmrRcmLiveControl_VerifiedLiveStateDecoded;
     }

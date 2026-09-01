@@ -159,6 +159,39 @@ public sealed class RcmVerifiedLiveDecoderTests
     }
 
     [Fact]
+    public void ConcatenatedVerifiedEventRecordsDecodeAllThreeSignalsFromOneCompleteFrame()
+    {
+        RcmPinProfile throttle1 = EventPin("A", "Throttle 1", removed: 0x00, applied: 0x0C);
+        RcmPinProfile throttle2 = EventPin("B", "Throttle 2", removed: 0x01, applied: 0x0D);
+        RcmPinProfile forward = EventPin("D", "Forward", removed: 0x03, applied: 0x0F);
+
+        IReadOnlyList<RcmVerifiedLiveSignal> signals = _decoder.Decode(
+            new byte[] { 0xFB, 0xFB, 0x0C, 0x0D, 0x03, 0xFF },
+            Profile(throttle1, throttle2, forward));
+
+        Assert.Collection(
+            signals,
+            signal => AssertDecodedEvent(signal, "A", "Throttle 1", RcmDecodedElectricalState.Active, 0x0C, 2),
+            signal => AssertDecodedEvent(signal, "B", "Throttle 2", RcmDecodedElectricalState.Active, 0x0D, 3),
+            signal => AssertDecodedEvent(signal, "D", "Forward", RcmDecodedElectricalState.Inactive, 0x03, 4));
+    }
+
+    [Fact]
+    public void RepeatedRecordsForOneVerifiedSignalUseTheLastGenuineObservationAndMapEveryRecordPosition()
+    {
+        RcmPinProfile throttle1 = EventPin("A", "Throttle 1", removed: 0x00, applied: 0x0C);
+
+        RcmVerifiedLiveSignal signal = Assert.Single(_decoder.Decode(
+            new byte[] { 0xFB, 0xFB, 0x0C, 0x00, 0x0C, 0x00, 0x0C, 0xFF },
+            Profile(throttle1)));
+
+        Assert.Equal(RcmDecodedElectricalState.Active, signal.State);
+        Assert.Equal(0x0C, signal.RawObservedValue);
+        Assert.Equal(6, signal.ObservedFramePosition);
+        Assert.Equal(new[] { 2, 3, 4, 5, 6 }, signal.MatchedFramePositions);
+    }
+
+    [Fact]
     public void OutOfRangeRawPositionReturnsUnknownWithoutThrowing()
     {
         RcmPinProfile pin = VerifiedPin("A", 99, bit: 0, removed: 0, applied: 1);
@@ -263,6 +296,39 @@ public sealed class RcmVerifiedLiveDecoderTests
                 SuccessfulRepetitionCount = 3
             }
         };
+    }
+
+    internal static RcmPinProfile EventPin(
+        string pinName,
+        string function,
+        int removed,
+        int applied)
+    {
+        RcmPinProfile pin = VerifiedPin(pinName, 2, bit: null, removed, applied);
+        pin.Function = function;
+        pin.CcfReference!.RecordA = removed;
+        pin.CcfReference.RecordB = applied;
+        pin.DecoderVerification.Function = function;
+        pin.DecoderVerification.ExpectedCcf.RecordA = removed;
+        pin.DecoderVerification.ExpectedCcf.RecordB = applied;
+        return pin;
+    }
+
+    private static void AssertDecodedEvent(
+        RcmVerifiedLiveSignal signal,
+        string pin,
+        string function,
+        RcmDecodedElectricalState state,
+        int rawValue,
+        int framePosition)
+    {
+        Assert.Equal(pin, signal.Pin);
+        Assert.Equal(function, signal.Function);
+        Assert.Equal(state, signal.State);
+        Assert.Equal(rawValue, signal.RawObservedValue);
+        Assert.Equal(framePosition, signal.ObservedFramePosition);
+        Assert.Equal(new[] { framePosition }, signal.MatchedFramePositions);
+        Assert.Equal(RcmVerificationStates.Verified, signal.VerificationStatus);
     }
 
     private static OtmrLiveFrame Frame(byte value) =>

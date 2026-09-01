@@ -120,6 +120,9 @@ public partial class OtmrServerSyncControl : UserControl
     internal bool PublishVerifiedLiveState(OtmrRealtimeDecodedState decodedState) =>
         _realtimePublisher.TryPublish(decodedState);
 
+    internal bool StartRealtimeLiveSession(OtmrRealtimeSessionStart sessionStart) =>
+        _realtimePublisher.TryStartSession(sessionStart);
+
     internal OtmrRealtimePublisherStatus RealtimePublisherStatus => _realtimePublisher.Status;
 
     internal OtmrRealtimePublisherDiagnostics RealtimePublisherDiagnostics => _realtimePublisher.Diagnostics;

@@ -185,7 +185,15 @@ app.MapPost(OtmrRealtimeContract.LiveRouteTemplate, async (
     if (!validation.IsValid)
         return ApiError(StatusCodes.Status400BadRequest, null, validation.ErrorCode, validation.Message);
 
-    await database.StoreLiveUpdateAsync(request, cancellationToken).ConfigureAwait(false);
+    OtmrLiveUpdateDisposition disposition = await database.StoreLiveUpdateAsync(
+        request, cancellationToken).ConfigureAwait(false);
+    if (disposition != OtmrLiveUpdateDisposition.Accepted)
+    {
+        string message = disposition == OtmrLiveUpdateDisposition.OlderSessionStart
+            ? "The live-session start is older than the vehicle's current live generation."
+            : "The realtime update does not belong to the vehicle's current sourceConnectionId.";
+        return ApiError(StatusCodes.Status409Conflict, null, disposition.ToString().ToUpperInvariant(), message);
+    }
     return Results.Ok(new OtmrRealtimeUpdateAcknowledgement(
         OtmrApiContract.Version,
         request.VehicleIdentifier,

@@ -33,6 +33,7 @@ public sealed class OtmrLiveService : IDisposable
     private DateTimeOffset? _liveStoppedAt;
     private string? _pendingTxInterpretation;
     private OtmrLiveState _state = OtmrLiveState.Disconnected;
+    private string? _sourceConnectionId;
     private Dictionary<string, long> _liveTransitionTimings = new(StringComparer.Ordinal);
     private CancellationTokenSource? _liveReceiveWatchdogCancellation;
     private long _completeLiveFrameCount;
@@ -64,6 +65,14 @@ public sealed class OtmrLiveService : IDisposable
     public bool IsLiveActive => State == OtmrLiveState.LiveActive;
     public bool IsLiveReady => State == OtmrLiveState.LiveReady;
     public long CompleteLiveFrameCount => Interlocked.Read(ref _completeLiveFrameCount);
+    public string? SourceConnectionId
+    {
+        get
+        {
+            lock (_stateSync)
+                return _sourceConnectionId;
+        }
+    }
     public OtmrLiveState State
     {
         get
@@ -78,6 +87,7 @@ public sealed class OtmrLiveService : IDisposable
     public event EventHandler<OtmrConnectionChangedEventArgs>? ConnectionChanged;
     public event EventHandler<OtmrLiveErrorEventArgs>? ErrorOccurred;
     public event EventHandler<OtmrLiveStateChangedEventArgs>? StateChanged;
+    public event EventHandler<OtmrLiveSessionStartedEventArgs>? LiveSessionStarted;
     public event EventHandler<OtmrProtocolDiagnosticEventArgs>? DiagnosticAdded;
 
     public void SetRecordingStore(IOtmrRecordingStore? recordingStore) =>
@@ -953,13 +963,31 @@ public sealed class OtmrLiveService : IDisposable
 
     private void SetState(OtmrLiveState state)
     {
+        OtmrLiveSessionStartedEventArgs? liveSessionStarted = null;
         lock (_stateSync)
         {
             if (_state == state)
                 return;
             _state = state;
+            if (state is OtmrLiveState.WaitingForLiveFrames or
+                OtmrLiveState.ConnectedIdle or
+                OtmrLiveState.NotLive or
+                OtmrLiveState.Disconnected or
+                OtmrLiveState.Error)
+            {
+                _sourceConnectionId = null;
+            }
+            if (state is OtmrLiveState.LiveReady or OtmrLiveState.LiveActive &&
+                string.IsNullOrWhiteSpace(_sourceConnectionId))
+            {
+                _sourceConnectionId = Guid.NewGuid().ToString("D");
+                liveSessionStarted = new OtmrLiveSessionStartedEventArgs(
+                    _sourceConnectionId, DateTimeOffset.UtcNow);
+            }
         }
         StateChanged?.Invoke(this, new OtmrLiveStateChangedEventArgs(state));
+        if (liveSessionStarted is not null)
+            LiveSessionStarted?.Invoke(this, liveSessionStarted);
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
@@ -1051,4 +1079,12 @@ public sealed class OtmrLiveErrorEventArgs : EventArgs
 {
     public OtmrLiveErrorEventArgs(Exception exception) => Exception = exception;
     public Exception Exception { get; }
+}
+
+public sealed class OtmrLiveSessionStartedEventArgs(
+    string sourceConnectionId,
+    DateTimeOffset startedUtc) : EventArgs
+{
+    public string SourceConnectionId { get; } = sourceConnectionId;
+    public DateTimeOffset StartedUtc { get; } = startedUtc.ToUniversalTime();
 }
