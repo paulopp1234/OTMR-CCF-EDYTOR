@@ -32,6 +32,75 @@ public sealed class MainFormLayoutTests
     }
 
     [Fact]
+    public void OtmrLiveRawCommunicationLogProvidesRealHorizontalAndVerticalScrolling()
+    {
+        RunInStaThread(() =>
+        {
+            using var form = new MainForm
+            {
+                StartPosition = FormStartPosition.Manual,
+                Location = Point.Empty,
+                Size = new Size(1200, 760)
+            };
+            form.Show();
+            TabControl tabs = Find<TabControl>(form, "tabs");
+            tabs.SelectedIndex = 4;
+            Application.DoEvents();
+
+            DataGridView capture = Find<DataGridView>(form, "captureGrid");
+            DataGridViewColumn time = capture.Columns["timeColumn"]!;
+            DataGridViewColumn direction = capture.Columns["directionColumn"]!;
+            DataGridViewColumn rawBytes = capture.Columns["bytesColumn"]!;
+            DataGridViewColumn interpretation = capture.Columns["interpretationColumn"]!;
+
+            Assert.Equal(ScrollBars.Both, capture.ScrollBars);
+            Assert.Equal(DataGridViewAutoSizeColumnsMode.None, capture.AutoSizeColumnsMode);
+            Assert.All(capture.Columns.Cast<DataGridViewColumn>(), column =>
+                Assert.Equal(DataGridViewAutoSizeColumnMode.None, column.AutoSizeMode));
+            Assert.Equal(110, time.Width);
+            Assert.Equal(65, direction.Width);
+            Assert.Equal(1100, rawBytes.Width);
+            Assert.True(rawBytes.MinimumWidth >= 900);
+            Assert.Equal(1000, interpretation.Width);
+            Assert.True(interpretation.MinimumWidth >= 800);
+            Assert.True(time.Frozen);
+            Assert.True(direction.Frozen);
+            Assert.False(rawBytes.Frozen);
+            Assert.False(interpretation.Frozen);
+
+            int totalColumnWidth = capture.Columns.Cast<DataGridViewColumn>().Sum(column => column.Width);
+            Assert.Equal(2275, totalColumnWidth);
+            Assert.True(totalColumnWidth > 1500);
+            Assert.True(totalColumnWidth > capture.ClientSize.Width,
+                $"Column width {totalColumnWidth}px must overflow the {capture.ClientSize.Width}px viewport.");
+
+            const string exactRawBytes =
+                "FB FB 0C 00 0C 00 0C FF D2 07 FB FB 00 FF D2 28";
+            const string exactInterpretation =
+                "VERIFIED: J1-A Throttle 1=ACTIVE [12] | Payload: 0C 00 0C 00 0C | Trailing: D2 07 (UNKNOWN)";
+            capture.Rows.Add("12:34:56.789", "RX", exactRawBytes, exactInterpretation);
+            for (int index = 0; index < 80; index++)
+                capture.Rows.Add("12:34:56.789", "RX", $"ROW {index:X2}", $"Interpretation row {index}");
+            Application.DoEvents();
+
+            Assert.Equal(exactRawBytes, Convert.ToString(capture.Rows[0].Cells["bytesColumn"].Value));
+            Assert.Equal(exactInterpretation,
+                Convert.ToString(capture.Rows[0].Cells["interpretationColumn"].Value));
+
+            HScrollBar horizontal = Assert.Single(capture.Controls.OfType<HScrollBar>());
+            VScrollBar vertical = Assert.Single(capture.Controls.OfType<VScrollBar>());
+            Assert.True(horizontal.Visible, "The overflowing fixed-width columns must show a horizontal scrollbar.");
+            Assert.True(vertical.Visible, "The populated grid must retain its vertical scrollbar.");
+
+            capture.HorizontalScrollingOffset = 500;
+            capture.FirstDisplayedScrollingRowIndex = 50;
+            Application.DoEvents();
+            Assert.True(capture.HorizontalScrollingOffset > 0);
+            Assert.True(capture.FirstDisplayedScrollingRowIndex > 0);
+        });
+    }
+
+    [Fact]
     public void OtmrLiveLayoutKeepsCaptureGridUsableAndCaptureUpdatesSurviveTemporaryNoRoomState()
     {
         RunInStaThread(() =>

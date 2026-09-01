@@ -347,6 +347,7 @@ partial class OtmrLiveControl
         // 
         captureGrid.AllowUserToAddRows = false;
         captureGrid.AllowUserToDeleteRows = false;
+        captureGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
         captureGrid.AutoGenerateColumns = false;
         captureGrid.BackgroundColor = SystemColors.Window;
         captureGrid.Columns.AddRange(new DataGridViewColumn[] { timeColumn, directionColumn, bytesColumn, interpretationColumn });
@@ -356,23 +357,34 @@ partial class OtmrLiveControl
         captureGrid.Name = "captureGrid";
         captureGrid.ReadOnly = true;
         captureGrid.RowHeadersVisible = false;
+        captureGrid.ScrollBars = ScrollBars.Both;
         captureGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        timeColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+        timeColumn.Frozen = true;
         timeColumn.HeaderText = "Time";
+        timeColumn.MinimumWidth = 100;
         timeColumn.Name = "timeColumn";
         timeColumn.ReadOnly = true;
-        timeColumn.Width = 105;
+        timeColumn.Width = 110;
+        directionColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+        directionColumn.Frozen = true;
         directionColumn.HeaderText = "TX/RX";
+        directionColumn.MinimumWidth = 60;
         directionColumn.Name = "directionColumn";
         directionColumn.ReadOnly = true;
-        directionColumn.Width = 60;
-        bytesColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+        directionColumn.Width = 65;
+        bytesColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
         bytesColumn.HeaderText = "Raw bytes";
+        bytesColumn.MinimumWidth = 900;
         bytesColumn.Name = "bytesColumn";
         bytesColumn.ReadOnly = true;
+        bytesColumn.Width = 1100;
+        interpretationColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
         interpretationColumn.HeaderText = "Interpretation (if verified)";
+        interpretationColumn.MinimumWidth = 800;
         interpretationColumn.Name = "interpretationColumn";
         interpretationColumn.ReadOnly = true;
-        interpretationColumn.Width = 300;
+        interpretationColumn.Width = 1000;
         // 
         // captureButtonsPanel
         // 
