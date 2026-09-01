@@ -18,7 +18,8 @@ public partial class OtmrLiveControl : UserControl
     private bool _captureScrollPending;
     private bool _captureScrollInvokeQueued;
     private CcfDocument? _selectedCcf;
-    private readonly Dictionary<OtmrCaptureEntry, string> _verifiedInterpretations = new();
+    private readonly Dictionary<OtmrCaptureEntry, OtmrLiveFrameAppendAnalysis> _rxAnalyses = new();
+    private readonly Dictionary<OtmrLiveFrame, DecodedFrameInterpretation> _decodedFrameInterpretations = new();
     private readonly Dictionary<Guid, InterpretedVerifiedState> _lastInterpretedVerifiedStates = new();
     private string? _interpretationProfileKey;
 
@@ -226,7 +227,8 @@ public partial class OtmrLiveControl : UserControl
     private void ClearCaptureButton_Click(object? sender, EventArgs e)
     {
         _liveService.ClearCapture();
-        _verifiedInterpretations.Clear();
+        _rxAnalyses.Clear();
+        _decodedFrameInterpretations.Clear();
         ResetVerifiedInterpretationState();
         RefreshCaptureGrid();
         statusLabel.Text = "Capture cleared.";
@@ -310,6 +312,8 @@ public partial class OtmrLiveControl : UserControl
 
         void AddRow()
         {
+            if (e.RxAnalysis is not null)
+                _rxAnalyses[e.Entry] = e.RxAnalysis;
             if (EntryMatchesCurrentFilter(e.Entry))
             {
                 AddCaptureRow(e.Entry);
@@ -466,20 +470,26 @@ public partial class OtmrLiveControl : UserControl
 
     private void AddCaptureRow(OtmrCaptureEntry entry)
     {
+        string interpretation = GetDisplayedInterpretation(entry);
+        string details = GetDetailedInterpretation(entry);
         int index = captureGrid.Rows.Add(
             entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"),
             entry.Direction.ToString().ToUpperInvariant(),
             entry.Hex,
-            GetDisplayedInterpretation(entry));
-        captureGrid.Rows[index].Tag = entry;
+            interpretation);
+        DataGridViewRow row = captureGrid.Rows[index];
+        row.Tag = entry;
+        row.Cells[interpretationColumn.Index].ToolTipText = details;
     }
 
     internal void ApplyVerifiedLiveInterpretation(
         OtmrCaptureEntry completingCaptureEntry,
         string? profileKey,
+        OtmrLiveFrame frame,
         IReadOnlyList<RcmVerifiedLiveSignal> decodedSignals)
     {
         ArgumentNullException.ThrowIfNull(completingCaptureEntry);
+        ArgumentNullException.ThrowIfNull(frame);
         ArgumentNullException.ThrowIfNull(decodedSignals);
         if (_closing || IsDisposed)
             return;
@@ -488,7 +498,7 @@ public partial class OtmrLiveControl : UserControl
         {
             RcmVerifiedLiveSignal[] snapshot = decodedSignals.ToArray();
             BeginInvoke((Action)(() => ApplyVerifiedLiveInterpretation(
-                completingCaptureEntry, profileKey, snapshot)));
+                completingCaptureEntry, profileKey, frame, snapshot)));
             return;
         }
 
@@ -499,45 +509,150 @@ public partial class OtmrLiveControl : UserControl
             _lastInterpretedVerifiedStates.Clear();
         }
 
-        var changed = new List<RcmVerifiedLiveSignal>();
+        var displayed = new List<DisplayedVerifiedState>();
         foreach (RcmVerifiedLiveSignal signal in decodedSignals.Where(IsDisplayableVerifiedState))
         {
             var current = new InterpretedVerifiedState(
                 signal.State,
                 signal.RawObservedValue!.Value,
                 signal.ObservedBitValue);
-            if (!_lastInterpretedVerifiedStates.TryGetValue(signal.PinId, out InterpretedVerifiedState? previous) ||
-                previous != current)
-            {
-                changed.Add(signal);
-                _lastInterpretedVerifiedStates[signal.PinId] = current;
-            }
+            bool unchanged = _lastInterpretedVerifiedStates.TryGetValue(
+                signal.PinId, out InterpretedVerifiedState? previous) && previous == current;
+            displayed.Add(new DisplayedVerifiedState(signal, unchanged));
+            _lastInterpretedVerifiedStates[signal.PinId] = current;
         }
 
-        if (changed.Count == 0)
-            return;
-
-        string verifiedText = "VERIFIED: " + string.Join("; ", changed.Select(FormatVerifiedState));
-        _verifiedInterpretations[completingCaptureEntry] =
-            _verifiedInterpretations.TryGetValue(completingCaptureEntry, out string? existing)
-                ? $"{existing} | {verifiedText}"
-                : verifiedText;
+        int payloadEndExclusive = Math.Max(2, frame.Length - 1);
+        HashSet<int> mappedPayloadPositions = decodedSignals
+            .Where(signal => string.Equals(
+                signal.VerificationStatus, RcmVerificationStates.Verified, StringComparison.Ordinal))
+            .Select(signal => signal.RawPosition)
+            .Where(position => position >= 2 && position < payloadEndExclusive)
+            .ToHashSet();
+        _decodedFrameInterpretations[frame] = new DecodedFrameInterpretation(
+            displayed,
+            mappedPayloadPositions);
 
         foreach (DataGridViewRow row in captureGrid.Rows)
         {
             if (!ReferenceEquals(row.Tag, completingCaptureEntry))
                 continue;
-            row.Cells[interpretationColumn.Index].Value = GetDisplayedInterpretation(completingCaptureEntry);
+            string interpretation = GetDisplayedInterpretation(completingCaptureEntry);
+            row.Cells[interpretationColumn.Index].Value = interpretation;
+            row.Cells[interpretationColumn.Index].ToolTipText = GetDetailedInterpretation(completingCaptureEntry);
             break;
         }
     }
 
-    private string GetDisplayedInterpretation(OtmrCaptureEntry entry)
+    private string GetDisplayedInterpretation(OtmrCaptureEntry entry) =>
+        GetInterpretation(entry, detailed: false);
+
+    private string GetDetailedInterpretation(OtmrCaptureEntry entry) =>
+        GetInterpretation(entry, detailed: true);
+
+    private string GetInterpretation(OtmrCaptureEntry entry, bool detailed)
     {
-        string original = entry.Interpretation ?? string.Empty;
-        if (!_verifiedInterpretations.TryGetValue(entry, out string? verified))
-            return original;
-        return string.IsNullOrWhiteSpace(original) ? verified : $"{original} | {verified}";
+        if (entry.Direction != OtmrDirection.Rx)
+            return entry.Interpretation ?? string.Empty;
+
+        if (!_rxAnalyses.TryGetValue(entry, out OtmrLiveFrameAppendAnalysis? analysis))
+        {
+            return string.IsNullOrWhiteSpace(entry.Interpretation)
+                ? $"UNKNOWN / UNFRAMED RX: {entry.Hex}"
+                : $"PROTOCOL/CONTROL RX — {entry.Interpretation}";
+        }
+
+        var primaryParts = new List<string>();
+        var structuralParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(entry.Interpretation))
+            structuralParts.Add($"PROTOCOL/CONTROL RX — {entry.Interpretation}");
+        if (analysis.MalformedCandidateCount > 0)
+        {
+            structuralParts.Add(analysis.MalformedCandidateCount == 1
+                ? "MALFORMED LIVE FRAME CANDIDATE — assembler resynchronised"
+                : $"MALFORMED LIVE FRAME CANDIDATES: {analysis.MalformedCandidateCount} — assembler resynchronised");
+        }
+
+        foreach (OtmrLiveFrameCompletion completion in analysis.CompletedFrames)
+        {
+            bool hasVerifiedDisplay = _decodedFrameInterpretations.TryGetValue(
+                completion.Frame, out DecodedFrameInterpretation? decoded) &&
+                decoded.DisplayedStates.Count > 0;
+            List<string> destination = !detailed && hasVerifiedDisplay
+                ? primaryParts
+                : structuralParts;
+            destination.Add(FormatCompletedFrame(completion.Frame, detailed));
+        }
+
+        bool protocolOnly = !string.IsNullOrWhiteSpace(entry.Interpretation) &&
+                            analysis.CompletedFrames.Count == 0 &&
+                            !analysis.HasPartialLiveFrame &&
+                            analysis.MalformedCandidateCount == 0;
+        if (!protocolOnly)
+        {
+            foreach (OtmrRxOutsideSegment outside in analysis.OutsideSegments)
+            {
+                bool followsTerminator = analysis.CompletedFrames.Any(
+                    completion => completion.TerminatorChunkOffset < outside.StartOffset);
+                structuralParts.Add(followsTerminator
+                    ? detailed
+                        ? $"TRAILING RX AFTER FF: {outside.Hex} — OUTSIDE LIVE FRAME; meaning UNKNOWN / UNMAPPED"
+                        : $"Trailing: {outside.Hex} (UNKNOWN)"
+                    : $"OUTSIDE LIVE FRAME: {outside.Hex} — UNKNOWN / UNMAPPED");
+            }
+        }
+
+        if (analysis.HasPartialLiveFrame)
+            structuralParts.Add("PARTIAL LIVE FRAME — waiting for FF");
+        if (primaryParts.Count == 0 && structuralParts.Count == 0)
+            structuralParts.Add(entry.Data.Length == 0
+                ? "UNKNOWN / UNFRAMED RX — empty chunk"
+                : $"UNKNOWN / UNFRAMED RX: {entry.Hex}");
+        return string.Join(" | ", primaryParts.Concat(structuralParts));
+    }
+
+    private string FormatCompletedFrame(OtmrLiveFrame frame, bool detailed)
+    {
+        byte[] bytes = frame.GetDataSnapshot();
+        byte[] payload = bytes.Length > 3 ? bytes[2..^1] : Array.Empty<byte>();
+        string payloadHex = payload.Length == 0
+            ? "(empty)"
+            : string.Join(" ", payload.Select(value => value.ToString("X2")));
+        var parts = new List<string>();
+        if (detailed)
+            parts.Add("COMPLETE LIVE FRAME");
+        parts.Add($"Payload: {payloadHex}");
+
+        if (!_decodedFrameInterpretations.TryGetValue(frame, out DecodedFrameInterpretation? decoded))
+            return detailed
+                ? string.Join(" | ", parts)
+                : $"COMPLETE LIVE FRAME | {string.Join(" | ", parts)}";
+
+        if (decoded.DisplayedStates.Count > 0)
+        {
+            string verified = "VERIFIED: " + string.Join(
+                "; ", decoded.DisplayedStates.Select(FormatVerifiedState));
+            if (detailed)
+                parts.Add(verified);
+            else
+                parts.Insert(0, verified);
+        }
+        else if (decoded.MappedPayloadPositions.Count > 0)
+        {
+            parts.Add("Explicitly VERIFIED mapping present, but state is UNKNOWN / not ACTIVE or INACTIVE");
+        }
+        else
+        {
+            parts.Add("No explicitly VERIFIED signal mapping");
+        }
+
+        int unmappedPayloadBytes = Math.Max(0, payload.Length - decoded.MappedPayloadPositions.Count);
+        if (unmappedPayloadBytes > 0)
+            parts.Add($"Unmapped payload bytes: {unmappedPayloadBytes}");
+
+        if (!detailed && decoded.DisplayedStates.Count == 0)
+            parts.Insert(0, "COMPLETE LIVE FRAME");
+        return string.Join(" | ", parts);
     }
 
     private void ResetVerifiedInterpretationState()
@@ -552,16 +667,24 @@ public partial class OtmrLiveControl : UserControl
         signal.State is RcmDecodedElectricalState.Active or RcmDecodedElectricalState.Inactive &&
         signal.RawObservedValue is >= byte.MinValue and <= byte.MaxValue;
 
-    private static string FormatVerifiedState(RcmVerifiedLiveSignal signal)
+    private static string FormatVerifiedState(DisplayedVerifiedState displayed)
     {
+        RcmVerifiedLiveSignal signal = displayed.Signal;
         string physical = string.IsNullOrWhiteSpace(signal.Connector)
             ? signal.Pin
             : string.IsNullOrWhiteSpace(signal.Pin)
                 ? signal.Connector
                 : $"{signal.Connector}-{signal.Pin}";
         string state = signal.State == RcmDecodedElectricalState.Active ? "ACTIVE" : "INACTIVE";
-        return $"{physical} {signal.Function}={state} [{signal.RawObservedValue!.Value}]".Trim();
+        string unchanged = displayed.Unchanged ? " (UNCHANGED)" : string.Empty;
+        return $"{physical} {signal.Function}={state} [{signal.RawObservedValue!.Value}]{unchanged}".Trim();
     }
+
+    private sealed record DisplayedVerifiedState(RcmVerifiedLiveSignal Signal, bool Unchanged);
+
+    private sealed record DecodedFrameInterpretation(
+        IReadOnlyList<DisplayedVerifiedState> DisplayedStates,
+        IReadOnlySet<int> MappedPayloadPositions);
 
     private sealed record InterpretedVerifiedState(
         RcmDecodedElectricalState State,

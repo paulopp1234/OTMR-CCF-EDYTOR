@@ -78,6 +78,7 @@ public partial class OtmrRcmLiveControl : UserControl
             _activeRcmProfilePath is null ? null : Path.GetFileName(_activeRcmProfilePath),
             _activeRcmProfileSha256,
             _decodedSignals.ToArray(),
+            frame,
             completingCaptureEntry));
     }
 
@@ -171,11 +172,13 @@ internal sealed class VerifiedLiveStateDecodedEventArgs(
     string? profileFilename,
     string? profileSha256,
     IReadOnlyList<RcmVerifiedLiveSignal> signals,
+    OtmrLiveFrame frame,
     CcfEditor.Otmr.Capture.OtmrCaptureEntry? completingCaptureEntry) : EventArgs
 {
     public DateTimeOffset TimestampUtc { get; } = timestampUtc.ToUniversalTime();
     public string? ProfileFilename { get; } = profileFilename;
     public string? ProfileSha256 { get; } = profileSha256;
     public IReadOnlyList<RcmVerifiedLiveSignal> Signals { get; } = signals;
+    public OtmrLiveFrame Frame { get; } = frame;
     public CcfEditor.Otmr.Capture.OtmrCaptureEntry? CompletingCaptureEntry { get; } = completingCaptureEntry;
 }

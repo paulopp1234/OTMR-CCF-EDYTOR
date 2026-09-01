@@ -25,15 +25,40 @@ public sealed class OtmrLiveFrameAssembler
 
     public int BufferedByteCount => _buffer.Count + (_sawFirstHeaderByte ? 1 : 0);
 
-    public IReadOnlyList<OtmrLiveFrame> Append(ReadOnlySpan<byte> chunk)
-    {
-        var completed = new List<OtmrLiveFrame>();
+    public IReadOnlyList<OtmrLiveFrame> Append(ReadOnlySpan<byte> chunk) =>
+        AppendWithAnalysis(chunk).CompletedFrames.Select(completion => completion.Frame).ToArray();
 
-        foreach (byte value in chunk)
+    /// <summary>
+    /// Runs the normal assembler once and additionally reports which bytes in
+    /// this exact transport chunk completed frames, remain partial, or were
+    /// outside live framing. Frame assembly behavior is unchanged.
+    /// </summary>
+    public OtmrLiveFrameAppendAnalysis AppendWithAnalysis(ReadOnlySpan<byte> chunk)
+    {
+        var completed = new List<OtmrLiveFrameCompletion>();
+        var outside = new bool[chunk.Length];
+        int malformedCandidates = 0;
+
+        for (int chunkOffset = 0; chunkOffset < chunk.Length; chunkOffset++)
         {
+            byte value = chunk[chunkOffset];
             if (!_insideFrame)
             {
-                HuntForHeader(value);
+                if (value != 0xFB)
+                {
+                    if (_sawFirstHeaderByte)
+                        malformedCandidates++;
+                    _sawFirstHeaderByte = false;
+                    outside[chunkOffset] = true;
+                }
+                else if (_sawFirstHeaderByte)
+                {
+                    StartFrame();
+                }
+                else
+                {
+                    _sawFirstHeaderByte = true;
+                }
                 continue;
             }
 
@@ -41,6 +66,7 @@ public sealed class OtmrLiveFrameAssembler
             // malformed/incomplete. Re-synchronise at the newest FB FB pair.
             if (_lastPayloadByteWasFb && value == 0xFB)
             {
+                malformedCandidates++;
                 StartFrame();
                 continue;
             }
@@ -50,18 +76,25 @@ public sealed class OtmrLiveFrameAssembler
 
             if (value == 0xFF)
             {
-                completed.Add(new OtmrLiveFrame(_buffer));
+                completed.Add(new OtmrLiveFrameCompletion(
+                    new OtmrLiveFrame(_buffer),
+                    chunkOffset));
                 Reset();
             }
             else if (_buffer.Count > _maximumFrameLength)
             {
+                malformedCandidates++;
                 bool trailingHeaderPrefix = value == 0xFB;
                 Reset();
                 _sawFirstHeaderByte = trailingHeaderPrefix;
             }
         }
 
-        return completed;
+        return new OtmrLiveFrameAppendAnalysis(
+            completed,
+            BuildOutsideSegments(chunk, outside),
+            _insideFrame || _sawFirstHeaderByte,
+            malformedCandidates);
     }
 
     public void Reset()
@@ -72,21 +105,25 @@ public sealed class OtmrLiveFrameAssembler
         _lastPayloadByteWasFb = false;
     }
 
-    private void HuntForHeader(byte value)
+    private static IReadOnlyList<OtmrRxOutsideSegment> BuildOutsideSegments(
+        ReadOnlySpan<byte> chunk,
+        IReadOnlyList<bool> outside)
     {
-        if (value != 0xFB)
+        var segments = new List<OtmrRxOutsideSegment>();
+        int start = -1;
+        for (int index = 0; index <= outside.Count; index++)
         {
-            _sawFirstHeaderByte = false;
-            return;
+            bool isOutside = index < outside.Count && outside[index];
+            if (isOutside && start < 0)
+                start = index;
+            if ((!isOutside || index == outside.Count) && start >= 0)
+            {
+                int length = index - start;
+                segments.Add(new OtmrRxOutsideSegment(start, chunk.Slice(start, length).ToArray()));
+                start = -1;
+            }
         }
-
-        if (_sawFirstHeaderByte)
-        {
-            StartFrame();
-            return;
-        }
-
-        _sawFirstHeaderByte = true;
+        return segments;
     }
 
     private void StartFrame()
@@ -99,6 +136,29 @@ public sealed class OtmrLiveFrameAssembler
         _lastPayloadByteWasFb = false;
     }
 }
+
+public sealed record OtmrLiveFrameCompletion(OtmrLiveFrame Frame, int TerminatorChunkOffset);
+
+public sealed class OtmrRxOutsideSegment
+{
+    private readonly byte[] _data;
+
+    internal OtmrRxOutsideSegment(int startOffset, byte[] data)
+    {
+        StartOffset = startOffset;
+        _data = data.ToArray();
+    }
+
+    public int StartOffset { get; }
+    public ReadOnlyMemory<byte> Data => _data;
+    public string Hex => string.Join(" ", _data.Select(value => value.ToString("X2")));
+}
+
+public sealed record OtmrLiveFrameAppendAnalysis(
+    IReadOnlyList<OtmrLiveFrameCompletion> CompletedFrames,
+    IReadOnlyList<OtmrRxOutsideSegment> OutsideSegments,
+    bool HasPartialLiveFrame,
+    int MalformedCandidateCount);
 
 public sealed class OtmrLiveFrame
 {

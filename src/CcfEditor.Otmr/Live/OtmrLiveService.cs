@@ -664,13 +664,13 @@ public sealed class OtmrLiveService : IDisposable
     {
         DateTimeOffset timestamp = DateTimeOffset.Now;
 
-        IReadOnlyList<OtmrLiveFrame> liveFrames;
+        OtmrLiveFrameAppendAnalysis liveAnalysis;
         IReadOnlyList<byte[]> protocolFrames;
         int liveBufferedBytes;
         lock (_frameSync)
         {
             protocolFrames = _protocolFrameAssembler.Append(e.Data);
-            liveFrames = _frameAssembler.Append(e.Data);
+            liveAnalysis = _frameAssembler.AppendWithAnalysis(e.Data);
             liveBufferedBytes = _frameAssembler.BufferedByteCount;
             foreach (byte[] frame in protocolFrames)
                 _protocolFrames.Writer.TryWrite(frame);
@@ -684,17 +684,18 @@ public sealed class OtmrLiveService : IDisposable
         // Preserve the exact RX chunk as one capture row, then carry that same
         // object with every live frame whose terminating FF arrived in it.
         var completingCaptureEntry = new OtmrCaptureEntry(timestamp, OtmrDirection.Rx, e.Data, interpretation);
-        AddCapture(completingCaptureEntry);
+        AddCapture(completingCaptureEntry, liveAnalysis);
 
         bool liveReceptionState = OtmrLiveStartProtocol.CanReceiveLiveFrames(State);
-        if (liveReceptionState && liveFrames.Count == 0)
+        if (liveReceptionState && liveAnalysis.CompletedFrames.Count == 0)
         {
             ReportHighResolutionDiagnostic(
                 $"LIVE_FRAME_ASSEMBLER_BUFFER | buffered-bytes={liveBufferedBytes} | rx-chunk-bytes={e.Data.Length}");
         }
 
-        foreach (OtmrLiveFrame frame in liveFrames)
+        foreach (OtmrLiveFrameCompletion completion in liveAnalysis.CompletedFrames)
         {
+            OtmrLiveFrame frame = completion.Frame;
             long totalFrames = Interlocked.Increment(ref _completeLiveFrameCount);
             ReportHighResolutionDiagnostic(
                 $"LIVE_FRAME_ASSEMBLED | length={frame.Length} | total={totalFrames} | hex={frame.Hex}");
@@ -912,11 +913,14 @@ public sealed class OtmrLiveService : IDisposable
     }
 
     private void AddCapture(OtmrCaptureEntry entry)
+        => AddCapture(entry, rxAnalysis: null);
+
+    private void AddCapture(OtmrCaptureEntry entry, OtmrLiveFrameAppendAnalysis? rxAnalysis)
     {
         lock (_captureSync)
             _capture.Add(entry);
         _recordingStore?.TryRecordRaw(entry);
-        CaptureAdded?.Invoke(this, new OtmrCaptureEntryEventArgs(entry));
+        CaptureAdded?.Invoke(this, new OtmrCaptureEntryEventArgs(entry, rxAnalysis));
     }
 
     private void Transport_ErrorOccurred(object? sender, OtmrTransportErrorEventArgs e)
@@ -989,8 +993,16 @@ public sealed class OtmrLiveService : IDisposable
 
 public sealed class OtmrCaptureEntryEventArgs : EventArgs
 {
-    public OtmrCaptureEntryEventArgs(OtmrCaptureEntry entry) => Entry = entry;
+    public OtmrCaptureEntryEventArgs(
+        OtmrCaptureEntry entry,
+        OtmrLiveFrameAppendAnalysis? rxAnalysis = null)
+    {
+        Entry = entry;
+        RxAnalysis = rxAnalysis;
+    }
+
     public OtmrCaptureEntry Entry { get; }
+    public OtmrLiveFrameAppendAnalysis? RxAnalysis { get; }
 }
 
 public sealed class OtmrConnectionChangedEventArgs : EventArgs

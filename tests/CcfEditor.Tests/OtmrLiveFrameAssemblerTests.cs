@@ -113,6 +113,45 @@ public sealed class OtmrLiveFrameAssemblerTests
     }
 
     [Fact]
+    public void AppendAnalysisCorrelatesSplitFrameTerminatorAndTrailingOutsideBytes()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        OtmrLiveFrameAppendAnalysis partial = assembler.AppendWithAnalysis(
+            new byte[] { 0xFB, 0xFB, 0x0C });
+        OtmrLiveFrameAppendAnalysis completing = assembler.AppendWithAnalysis(
+            new byte[] { 0xFF, 0xD2, 0x07 });
+
+        Assert.True(partial.HasPartialLiveFrame);
+        Assert.Empty(partial.CompletedFrames);
+        Assert.Empty(partial.OutsideSegments);
+        OtmrLiveFrameCompletion completion = Assert.Single(completing.CompletedFrames);
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x0C, 0xFF }, completion.Frame.GetDataSnapshot());
+        Assert.Equal(0, completion.TerminatorChunkOffset);
+        OtmrRxOutsideSegment trailing = Assert.Single(completing.OutsideSegments);
+        Assert.Equal(1, trailing.StartOffset);
+        Assert.Equal(new byte[] { 0xD2, 0x07 }, trailing.Data.ToArray());
+        Assert.False(completing.HasPartialLiveFrame);
+    }
+
+    [Fact]
+    public void AppendAnalysisReportsPureOutsideBytesAndMalformedResynchronisation()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        OtmrLiveFrameAppendAnalysis outside = assembler.AppendWithAnalysis(new byte[] { 0xD2, 0x28 });
+        OtmrLiveFrameAppendAnalysis malformed = assembler.AppendWithAnalysis(
+            new byte[] { 0xFB, 0xFB, 0x01, 0xFB, 0xFB, 0x0C, 0xFF });
+
+        Assert.Equal(new byte[] { 0xD2, 0x28 }, Assert.Single(outside.OutsideSegments).Data.ToArray());
+        Assert.Empty(outside.CompletedFrames);
+        Assert.Equal(1, malformed.MalformedCandidateCount);
+        Assert.Equal(
+            new byte[] { 0xFB, 0xFB, 0x0C, 0xFF },
+            Assert.Single(malformed.CompletedFrames).Frame.GetDataSnapshot());
+    }
+
+    [Fact]
     public void NewHeaderInsideIncompleteFrame_ResynchronisesCleanly()
     {
         var assembler = new OtmrLiveFrameAssembler();

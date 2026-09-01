@@ -43,6 +43,7 @@ public partial class MainForm
             otmrLiveControl.ApplyVerifiedLiveInterpretation(
                 e.CompletingCaptureEntry,
                 e.ProfileSha256 ?? e.ProfileFilename,
+                e.Frame,
                 e.Signals);
         }
 

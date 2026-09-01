@@ -77,12 +77,12 @@ public sealed class OtmrRealtimePublisherTests
             string unverifiedProfilePath = Path.Combine(folder, "runtime-unverified-profile.json");
             try
             {
-                RcmPinProfile pin = RcmVerifiedLiveDecoderTests.VerifiedPin("A", 3, bit: null, removed: 0, applied: 12);
+                RcmPinProfile pin = RcmVerifiedLiveDecoderTests.VerifiedPin("A", 2, bit: null, removed: 0, applied: 12);
                 MakePersistableVerified(pin);
                 RcmProfile profile = RcmVerifiedLiveDecoderTests.Profile(pin);
                 RcmProfileJson.SaveAsync(profilePath, profile, DateTimeOffset.UtcNow).GetAwaiter().GetResult();
                 RcmPinProfile unverifiedPin = RcmVerifiedLiveDecoderTests.VerifiedPin(
-                    "A", 3, bit: null, removed: 0, applied: 12);
+                    "A", 2, bit: null, removed: 0, applied: 12);
                 MakePersistableVerified(unverifiedPin);
                 unverifiedPin.DecoderVerification.Status = RcmVerificationStates.NotVerified;
                 unverifiedPin.DecoderVerification.VerifiedAt = null;
@@ -134,14 +134,15 @@ public sealed class OtmrRealtimePublisherTests
 
                 DataGridView rawGrid = Find<DataGridView>(live, "captureGrid");
                 stage = "injecting partial frame";
-                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x0C });
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x0C });
                 Assert.Empty(posted);
                 Assert.Equal(0, decodedNotifications);
                 DataGridViewRow partialRow = Assert.Single(rawGrid.Rows.Cast<DataGridViewRow>());
-                Assert.Equal("FB FB 38 0C", Convert.ToString(partialRow.Cells["bytesColumn"].Value));
-                Assert.Equal(string.Empty, Convert.ToString(partialRow.Cells["interpretationColumn"].Value));
+                Assert.Equal("FB FB 0C", Convert.ToString(partialRow.Cells["bytesColumn"].Value));
+                Assert.Equal("PARTIAL LIVE FRAME — waiting for FF",
+                    Convert.ToString(partialRow.Cells["interpretationColumn"].Value));
 
-                stage = "injecting terminating chunk";
+                stage = "injecting terminating FF chunk";
                 InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFF });
                 stage = "waiting for first POST";
                 WaitUntilWithMessagePump(() => posted.Count == 1);
@@ -174,14 +175,23 @@ public sealed class OtmrRealtimePublisherTests
                 Assert.Equal("FF", Convert.ToString(completingRow.Cells["bytesColumn"].Value));
                 string interpretation = Convert.ToString(
                     completingRow.Cells["interpretationColumn"].Value) ?? string.Empty;
-                Assert.Equal("VERIFIED: J1-A Throttle 1=ACTIVE [12]", interpretation);
+                Assert.Equal(
+                    "VERIFIED: J1-A Throttle 1=ACTIVE [12] | Payload: 0C",
+                    interpretation);
+                Assert.StartsWith("VERIFIED:", interpretation, StringComparison.Ordinal);
                 Assert.Contains("J1-A", interpretation, StringComparison.Ordinal);
                 Assert.Contains("Throttle 1", interpretation, StringComparison.Ordinal);
                 Assert.Contains("ACTIVE", interpretation, StringComparison.Ordinal);
                 Assert.Contains("[12]", interpretation, StringComparison.Ordinal);
+                Assert.Equal(
+                    "COMPLETE LIVE FRAME | Payload: 0C | VERIFIED: J1-A Throttle 1=ACTIVE [12]",
+                    completingRow.Cells["interpretationColumn"].ToolTipText);
 
-                stage = "injecting repeated frame";
-                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x0C, 0xFF });
+                stage = "injecting repeated split frame with trailing D2 bytes";
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x0C });
+                Assert.Equal("PARTIAL LIVE FRAME — waiting for FF",
+                    Convert.ToString(rawGrid.Rows[2].Cells["interpretationColumn"].Value));
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFF, 0xD2, 0x07 });
                 stage = "waiting for deduplication";
                 WaitUntilWithMessagePump(() =>
                     serverSync.RealtimePublisherStatus.LastResult.StartsWith("UNCHANGED", StringComparison.Ordinal));
@@ -189,20 +199,96 @@ public sealed class OtmrRealtimePublisherTests
                 Assert.Single(posted);
                 Assert.Equal(2, GetPrivateLong(form, "_realtimeFramesReceived"));
                 Assert.Equal(2, GetPrivateLong(form, "_realtimeFramesDecoded"));
-                Assert.Equal(string.Empty, Convert.ToString(
-                    rawGrid.Rows[2].Cells["interpretationColumn"].Value));
+                string unchangedInterpretation = Convert.ToString(
+                    rawGrid.Rows[3].Cells["interpretationColumn"].Value) ?? string.Empty;
+                Assert.Equal(
+                    "VERIFIED: J1-A Throttle 1=ACTIVE [12] (UNCHANGED) | Payload: 0C | " +
+                    "Trailing: D2 07 (UNKNOWN)",
+                    unchangedInterpretation);
+                Assert.StartsWith("VERIFIED:", unchangedInterpretation, StringComparison.Ordinal);
+                Assert.Contains(
+                    "TRAILING RX AFTER FF: D2 07 — OUTSIDE LIVE FRAME; meaning UNKNOWN / UNMAPPED",
+                    rawGrid.Rows[3].Cells["interpretationColumn"].ToolTipText,
+                    StringComparison.Ordinal);
+
+                stage = "injecting complete frame with unmapped payload positions";
+                InjectTransportBytesThroughRealLiveService(
+                    live,
+                    new byte[] { 0xFB, 0xFB, 0x0C, 0x00, 0x0C, 0x00, 0x0C, 0xFF });
+                WaitUntilWithMessagePump(() =>
+                    serverSync.RealtimePublisherStatus.LastResult.StartsWith("UNCHANGED", StringComparison.Ordinal));
+                PumpMessagesFor(TimeSpan.FromMilliseconds(100));
+                Assert.Single(posted);
+                string unmappedInterpretation = Convert.ToString(
+                    rawGrid.Rows[4].Cells["interpretationColumn"].Value) ?? string.Empty;
+                Assert.StartsWith("VERIFIED:", unmappedInterpretation, StringComparison.Ordinal);
+                Assert.Contains("Payload: 0C 00 0C 00 0C", unmappedInterpretation, StringComparison.Ordinal);
+                Assert.Contains("VERIFIED: J1-A Throttle 1=ACTIVE [12] (UNCHANGED)",
+                    unmappedInterpretation, StringComparison.Ordinal);
+                Assert.Contains("Unmapped payload bytes: 4", unmappedInterpretation, StringComparison.Ordinal);
+                Assert.DoesNotContain("Forward", unmappedInterpretation, StringComparison.OrdinalIgnoreCase);
+
+                stage = "injecting changed inactive frame";
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x00, 0xFF });
+                WaitUntilWithMessagePump(() => posted.Count == 2);
+                string inactiveInterpretation = Convert.ToString(
+                    rawGrid.Rows[5].Cells["interpretationColumn"].Value) ?? string.Empty;
+                Assert.Equal(
+                    "VERIFIED: J1-A Throttle 1=INACTIVE [0] | Payload: 00",
+                    inactiveInterpretation);
+                Assert.StartsWith("VERIFIED:", inactiveInterpretation, StringComparison.Ordinal);
+
+                stage = "injecting pure outside-frame D2 bytes";
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xD2, 0x28 });
+                Assert.Equal(
+                    "OUTSIDE LIVE FRAME: D2 28 — UNKNOWN / UNMAPPED",
+                    Convert.ToString(rawGrid.Rows[6].Cells["interpretationColumn"].Value));
+                Assert.Equal(2, posted.Count);
 
                 stage = "loading unverified profile";
                 Task loadUnverifiedProfile = bench.LoadRcmProfileAsync(unverifiedProfilePath);
                 WaitUntilWithMessagePump(() => loadUnverifiedProfile.IsCompleted);
                 loadUnverifiedProfile.GetAwaiter().GetResult();
                 stage = "injecting frame with unverified mapping";
-                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x0C, 0xFF });
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x0C, 0xFF });
                 Application.DoEvents();
-                Assert.Single(posted);
+                Assert.Equal(2, posted.Count);
                 Assert.Empty(rcmLive.GetDecodedSignalSnapshot());
-                Assert.Equal(string.Empty, Convert.ToString(
-                    rawGrid.Rows[3].Cells["interpretationColumn"].Value));
+                string unverifiedInterpretation = Convert.ToString(
+                    rawGrid.Rows[7].Cells["interpretationColumn"].Value) ?? string.Empty;
+                Assert.Contains("COMPLETE LIVE FRAME", unverifiedInterpretation, StringComparison.Ordinal);
+                Assert.Contains("Payload: 0C", unverifiedInterpretation, StringComparison.Ordinal);
+                Assert.Contains("No explicitly VERIFIED signal mapping", unverifiedInterpretation, StringComparison.Ordinal);
+                Assert.Contains("Unmapped payload bytes: 1", unverifiedInterpretation, StringComparison.Ordinal);
+                Assert.DoesNotContain("Throttle", unverifiedInterpretation, StringComparison.OrdinalIgnoreCase);
+
+                stage = "injecting malformed candidate followed by a valid frame";
+                InjectTransportBytesThroughRealLiveService(
+                    live,
+                    new byte[] { 0xFB, 0xFB, 0x01, 0xFB, 0xFB, 0x0C, 0xFF });
+                PumpMessagesFor(TimeSpan.FromMilliseconds(100));
+                Assert.Equal(2, posted.Count);
+                string malformedInterpretation = Convert.ToString(
+                    rawGrid.Rows[8].Cells["interpretationColumn"].Value) ?? string.Empty;
+                Assert.Contains("MALFORMED LIVE FRAME CANDIDATE", malformedInterpretation, StringComparison.Ordinal);
+                Assert.Contains("COMPLETE LIVE FRAME", malformedInterpretation, StringComparison.Ordinal);
+
+                Assert.Equal(
+                    new[]
+                    {
+                        "FB FB 0C",
+                        "FF",
+                        "FB FB 0C",
+                        "FF D2 07",
+                        "FB FB 0C 00 0C 00 0C FF",
+                        "FB FB 00 FF",
+                        "D2 28",
+                        "FB FB 0C FF",
+                        "FB FB 01 FB FB 0C FF"
+                    },
+                    rawGrid.Rows.Cast<DataGridViewRow>()
+                        .Select(row => Convert.ToString(row.Cells["bytesColumn"].Value))
+                        .ToArray());
                 stage = "disposing MainForm";
             }
             finally
@@ -454,6 +540,16 @@ public sealed class OtmrRealtimePublisherTests
             Thread.Sleep(10);
         }
         Assert.True(condition(), "Timed out waiting for the MainForm realtime route.");
+    }
+
+    private static void PumpMessagesFor(TimeSpan duration)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(duration);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            Application.DoEvents();
+            Thread.Sleep(5);
+        }
     }
 
     private static void MakePersistableVerified(RcmPinProfile pin)
