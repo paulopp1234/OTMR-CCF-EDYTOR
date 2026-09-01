@@ -681,7 +681,10 @@ public sealed class OtmrLiveService : IDisposable
             : protocolFrames.Count == 1
                 ? $"Complete OTMR protocol frame 01 {protocolFrames[0][1]:X2} assembled"
                 : $"{protocolFrames.Count} complete OTMR protocol frames assembled";
-        AddCapture(new OtmrCaptureEntry(timestamp, OtmrDirection.Rx, e.Data, interpretation));
+        // Preserve the exact RX chunk as one capture row, then carry that same
+        // object with every live frame whose terminating FF arrived in it.
+        var completingCaptureEntry = new OtmrCaptureEntry(timestamp, OtmrDirection.Rx, e.Data, interpretation);
+        AddCapture(completingCaptureEntry);
 
         bool liveReceptionState = OtmrLiveStartProtocol.CanReceiveLiveFrames(State);
         if (liveReceptionState && liveFrames.Count == 0)
@@ -698,7 +701,7 @@ public sealed class OtmrLiveService : IDisposable
             if (State is OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.LiveReady)
                 SetState(OtmrLiveState.LiveActive);
             _recordingStore?.TryRecordLiveFrame(timestamp, frame);
-            FrameReceived?.Invoke(this, new OtmrLiveFrameEventArgs(timestamp, frame));
+            FrameReceived?.Invoke(this, new OtmrLiveFrameEventArgs(timestamp, frame, completingCaptureEntry));
         }
     }
 
@@ -1005,13 +1008,23 @@ public sealed class OtmrConnectionChangedEventArgs : EventArgs
 public sealed class OtmrLiveFrameEventArgs : EventArgs
 {
     public OtmrLiveFrameEventArgs(DateTimeOffset timestamp, OtmrLiveFrame frame)
+        : this(timestamp, frame, completingCaptureEntry: null)
+    {
+    }
+
+    public OtmrLiveFrameEventArgs(
+        DateTimeOffset timestamp,
+        OtmrLiveFrame frame,
+        OtmrCaptureEntry? completingCaptureEntry)
     {
         Timestamp = timestamp;
         Frame = frame ?? throw new ArgumentNullException(nameof(frame));
+        CompletingCaptureEntry = completingCaptureEntry;
     }
 
     public DateTimeOffset Timestamp { get; }
     public OtmrLiveFrame Frame { get; }
+    public OtmrCaptureEntry? CompletingCaptureEntry { get; }
 }
 
 public sealed record OtmrProtocolDiagnosticEntry(DateTimeOffset Timestamp, string Message);

@@ -1,6 +1,7 @@
 using CcfEditor.Core;
 using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
+using CcfEditor.Otmr.Rcm;
 using CcfEditor.Otmr.Transport;
 
 namespace CcfEditor.WinForms;
@@ -17,6 +18,9 @@ public partial class OtmrLiveControl : UserControl
     private bool _captureScrollPending;
     private bool _captureScrollInvokeQueued;
     private CcfDocument? _selectedCcf;
+    private readonly Dictionary<OtmrCaptureEntry, string> _verifiedInterpretations = new();
+    private readonly Dictionary<Guid, InterpretedVerifiedState> _lastInterpretedVerifiedStates = new();
+    private string? _interpretationProfileKey;
 
     internal OtmrLiveState State => _liveService.State;
 
@@ -222,6 +226,8 @@ public partial class OtmrLiveControl : UserControl
     private void ClearCaptureButton_Click(object? sender, EventArgs e)
     {
         _liveService.ClearCapture();
+        _verifiedInterpretations.Clear();
+        ResetVerifiedInterpretationState();
         RefreshCaptureGrid();
         statusLabel.Text = "Capture cleared.";
     }
@@ -342,6 +348,8 @@ public partial class OtmrLiveControl : UserControl
 
         void Update()
         {
+            if (e.State is OtmrLiveState.Disconnected or OtmrLiveState.WaitingForLiveFrames)
+                ResetVerifiedInterpretationState();
             UpdateStateUi();
             (FindForm() as MainForm)?.ReportOtmrLiveState(e.State);
         }
@@ -462,9 +470,103 @@ public partial class OtmrLiveControl : UserControl
             entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"),
             entry.Direction.ToString().ToUpperInvariant(),
             entry.Hex,
-            entry.Interpretation ?? string.Empty);
+            GetDisplayedInterpretation(entry));
         captureGrid.Rows[index].Tag = entry;
     }
+
+    internal void ApplyVerifiedLiveInterpretation(
+        OtmrCaptureEntry completingCaptureEntry,
+        string? profileKey,
+        IReadOnlyList<RcmVerifiedLiveSignal> decodedSignals)
+    {
+        ArgumentNullException.ThrowIfNull(completingCaptureEntry);
+        ArgumentNullException.ThrowIfNull(decodedSignals);
+        if (_closing || IsDisposed)
+            return;
+
+        if (InvokeRequired)
+        {
+            RcmVerifiedLiveSignal[] snapshot = decodedSignals.ToArray();
+            BeginInvoke((Action)(() => ApplyVerifiedLiveInterpretation(
+                completingCaptureEntry, profileKey, snapshot)));
+            return;
+        }
+
+        string normalizedProfileKey = profileKey?.Trim() ?? string.Empty;
+        if (!string.Equals(_interpretationProfileKey, normalizedProfileKey, StringComparison.Ordinal))
+        {
+            _interpretationProfileKey = normalizedProfileKey;
+            _lastInterpretedVerifiedStates.Clear();
+        }
+
+        var changed = new List<RcmVerifiedLiveSignal>();
+        foreach (RcmVerifiedLiveSignal signal in decodedSignals.Where(IsDisplayableVerifiedState))
+        {
+            var current = new InterpretedVerifiedState(
+                signal.State,
+                signal.RawObservedValue!.Value,
+                signal.ObservedBitValue);
+            if (!_lastInterpretedVerifiedStates.TryGetValue(signal.PinId, out InterpretedVerifiedState? previous) ||
+                previous != current)
+            {
+                changed.Add(signal);
+                _lastInterpretedVerifiedStates[signal.PinId] = current;
+            }
+        }
+
+        if (changed.Count == 0)
+            return;
+
+        string verifiedText = "VERIFIED: " + string.Join("; ", changed.Select(FormatVerifiedState));
+        _verifiedInterpretations[completingCaptureEntry] =
+            _verifiedInterpretations.TryGetValue(completingCaptureEntry, out string? existing)
+                ? $"{existing} | {verifiedText}"
+                : verifiedText;
+
+        foreach (DataGridViewRow row in captureGrid.Rows)
+        {
+            if (!ReferenceEquals(row.Tag, completingCaptureEntry))
+                continue;
+            row.Cells[interpretationColumn.Index].Value = GetDisplayedInterpretation(completingCaptureEntry);
+            break;
+        }
+    }
+
+    private string GetDisplayedInterpretation(OtmrCaptureEntry entry)
+    {
+        string original = entry.Interpretation ?? string.Empty;
+        if (!_verifiedInterpretations.TryGetValue(entry, out string? verified))
+            return original;
+        return string.IsNullOrWhiteSpace(original) ? verified : $"{original} | {verified}";
+    }
+
+    private void ResetVerifiedInterpretationState()
+    {
+        _interpretationProfileKey = null;
+        _lastInterpretedVerifiedStates.Clear();
+    }
+
+    private static bool IsDisplayableVerifiedState(RcmVerifiedLiveSignal signal) =>
+        signal.PinId != Guid.Empty &&
+        string.Equals(signal.VerificationStatus, RcmVerificationStates.Verified, StringComparison.Ordinal) &&
+        signal.State is RcmDecodedElectricalState.Active or RcmDecodedElectricalState.Inactive &&
+        signal.RawObservedValue is >= byte.MinValue and <= byte.MaxValue;
+
+    private static string FormatVerifiedState(RcmVerifiedLiveSignal signal)
+    {
+        string physical = string.IsNullOrWhiteSpace(signal.Connector)
+            ? signal.Pin
+            : string.IsNullOrWhiteSpace(signal.Pin)
+                ? signal.Connector
+                : $"{signal.Connector}-{signal.Pin}";
+        string state = signal.State == RcmDecodedElectricalState.Active ? "ACTIVE" : "INACTIVE";
+        return $"{physical} {signal.Function}={state} [{signal.RawObservedValue!.Value}]".Trim();
+    }
+
+    private sealed record InterpretedVerifiedState(
+        RcmDecodedElectricalState State,
+        int RawObservedValue,
+        int? ObservedBitValue);
 
     private bool EntryMatchesCurrentFilter(OtmrCaptureEntry entry)
     {

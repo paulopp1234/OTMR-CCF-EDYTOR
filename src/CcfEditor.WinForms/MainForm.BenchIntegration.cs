@@ -15,13 +15,16 @@ public partial class MainForm
     private void OtmrLiveControl_GenuineLiveFrameReceived(object? sender, OtmrLiveFrameEventArgs e)
     {
         _realtimeFramesReceived++;
-        ReportOtmrLiveFrame(e.Timestamp, e.Frame);
+        ReportOtmrLiveFrame(e.Timestamp, e.Frame, e.CompletingCaptureEntry);
     }
 
-    internal void ReportOtmrLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
+    internal void ReportOtmrLiveFrame(
+        DateTimeOffset timestamp,
+        OtmrLiveFrame frame,
+        CcfEditor.Otmr.Capture.OtmrCaptureEntry? completingCaptureEntry = null)
     {
         otmrBenchControl.ReportRawLiveFrame(timestamp, frame);
-        otmrRcmLiveControl.ReportRawLiveFrame(timestamp, frame);
+        otmrRcmLiveControl.ReportRawLiveFrame(timestamp, frame, completingCaptureEntry);
     }
 
     internal void ReportOtmrLiveState(OtmrLiveState state)
@@ -35,6 +38,14 @@ public partial class MainForm
         VerifiedLiveStateDecodedEventArgs e)
     {
         _realtimeFramesDecoded++;
+        if (e.CompletingCaptureEntry is not null)
+        {
+            otmrLiveControl.ApplyVerifiedLiveInterpretation(
+                e.CompletingCaptureEntry,
+                e.ProfileSha256 ?? e.ProfileFilename,
+                e.Signals);
+        }
+
         string? vehicleIdentifier = ReadRealtimeVehicleIdentifierFromCcf();
         int decodedStateCount = e.Signals.Count(signal =>
             signal.State is RcmDecodedElectricalState.Active or RcmDecodedElectricalState.Inactive);

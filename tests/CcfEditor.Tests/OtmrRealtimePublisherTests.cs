@@ -74,12 +74,23 @@ public sealed class OtmrRealtimePublisherTests
             string folder = Path.Combine(Path.GetTempPath(), $"otmr-realtime-mainform-{Guid.NewGuid():N}");
             Directory.CreateDirectory(folder);
             string profilePath = Path.Combine(folder, "runtime-verified-profile.json");
+            string unverifiedProfilePath = Path.Combine(folder, "runtime-unverified-profile.json");
             try
             {
-                RcmPinProfile pin = RcmVerifiedLiveDecoderTests.VerifiedPin("A", 3, 0, 0, 1);
+                RcmPinProfile pin = RcmVerifiedLiveDecoderTests.VerifiedPin("A", 3, bit: null, removed: 0, applied: 12);
                 MakePersistableVerified(pin);
                 RcmProfile profile = RcmVerifiedLiveDecoderTests.Profile(pin);
                 RcmProfileJson.SaveAsync(profilePath, profile, DateTimeOffset.UtcNow).GetAwaiter().GetResult();
+                RcmPinProfile unverifiedPin = RcmVerifiedLiveDecoderTests.VerifiedPin(
+                    "A", 3, bit: null, removed: 0, applied: 12);
+                MakePersistableVerified(unverifiedPin);
+                unverifiedPin.DecoderVerification.Status = RcmVerificationStates.NotVerified;
+                unverifiedPin.DecoderVerification.VerifiedAt = null;
+                unverifiedPin.Comparison.DecoderVerified = false;
+                RcmProfileJson.SaveAsync(
+                    unverifiedProfilePath,
+                    RcmVerifiedLiveDecoderTests.Profile(unverifiedPin),
+                    DateTimeOffset.UtcNow).GetAwaiter().GetResult();
 
                 stage = "constructing MainForm";
                 var posted = new ConcurrentQueue<(Uri Uri, OtmrRealtimeUpdateRequest Update)>();
@@ -105,6 +116,8 @@ public sealed class OtmrRealtimePublisherTests
                 OtmrLiveControl live = Find<OtmrLiveControl>(form, "otmrLiveControl");
                 OtmrRcmLiveControl rcmLive = Find<OtmrRcmLiveControl>(form, "otmrRcmLiveControl");
                 OtmrServerSyncControl serverSync = Find<OtmrServerSyncControl>(form, "otmrServerSyncControl");
+                Assert.Null(typeof(MainForm).GetField("_recordingStore", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(form));
                 Task loadProfile = bench.LoadRcmProfileAsync(profilePath);
                 WaitUntilWithMessagePump(() => loadProfile.IsCompleted);
                 loadProfile.GetAwaiter().GetResult();
@@ -119,8 +132,17 @@ public sealed class OtmrRealtimePublisherTests
                     decoded = e;
                 };
 
-                stage = "injecting first frame";
-                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x01, 0xFF });
+                DataGridView rawGrid = Find<DataGridView>(live, "captureGrid");
+                stage = "injecting partial frame";
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x0C });
+                Assert.Empty(posted);
+                Assert.Equal(0, decodedNotifications);
+                DataGridViewRow partialRow = Assert.Single(rawGrid.Rows.Cast<DataGridViewRow>());
+                Assert.Equal("FB FB 38 0C", Convert.ToString(partialRow.Cells["bytesColumn"].Value));
+                Assert.Equal(string.Empty, Convert.ToString(partialRow.Cells["interpretationColumn"].Value));
+
+                stage = "injecting terminating chunk";
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFF });
                 stage = "waiting for first POST";
                 WaitUntilWithMessagePump(() => posted.Count == 1);
 
@@ -136,6 +158,7 @@ public sealed class OtmrRealtimePublisherTests
                 Assert.Equal(OtmrRealtimeContract.Active, postedSignal.State);
                 Assert.Equal(decodedSignal.RawObservedValue, postedSignal.RawValue);
                 Assert.Equal(OtmrRealtimeContract.Verified, postedSignal.Verification);
+                Assert.Equal(12, postedSignal.RawValue);
 
                 DataGridView grid = Find<DataGridView>(rcmLive, "decodedSignalsGrid");
                 Assert.Equal("ACTIVE", Convert.ToString(Assert.Single(grid.Rows.Cast<DataGridViewRow>())
@@ -146,9 +169,19 @@ public sealed class OtmrRealtimePublisherTests
                 Assert.Contains("Verified mappings: 1", diagnostics.Text, StringComparison.Ordinal);
                 Assert.Contains("Vehicle ID: 171804", diagnostics.Text, StringComparison.Ordinal);
                 Assert.Contains("Decoded states: 1", diagnostics.Text, StringComparison.Ordinal);
+                Assert.Equal(2, rawGrid.Rows.Count);
+                DataGridViewRow completingRow = rawGrid.Rows[1];
+                Assert.Equal("FF", Convert.ToString(completingRow.Cells["bytesColumn"].Value));
+                string interpretation = Convert.ToString(
+                    completingRow.Cells["interpretationColumn"].Value) ?? string.Empty;
+                Assert.Equal("VERIFIED: J1-A Throttle 1=ACTIVE [12]", interpretation);
+                Assert.Contains("J1-A", interpretation, StringComparison.Ordinal);
+                Assert.Contains("Throttle 1", interpretation, StringComparison.Ordinal);
+                Assert.Contains("ACTIVE", interpretation, StringComparison.Ordinal);
+                Assert.Contains("[12]", interpretation, StringComparison.Ordinal);
 
                 stage = "injecting repeated frame";
-                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x01, 0xFF });
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x0C, 0xFF });
                 stage = "waiting for deduplication";
                 WaitUntilWithMessagePump(() =>
                     serverSync.RealtimePublisherStatus.LastResult.StartsWith("UNCHANGED", StringComparison.Ordinal));
@@ -156,11 +189,26 @@ public sealed class OtmrRealtimePublisherTests
                 Assert.Single(posted);
                 Assert.Equal(2, GetPrivateLong(form, "_realtimeFramesReceived"));
                 Assert.Equal(2, GetPrivateLong(form, "_realtimeFramesDecoded"));
+                Assert.Equal(string.Empty, Convert.ToString(
+                    rawGrid.Rows[2].Cells["interpretationColumn"].Value));
+
+                stage = "loading unverified profile";
+                Task loadUnverifiedProfile = bench.LoadRcmProfileAsync(unverifiedProfilePath);
+                WaitUntilWithMessagePump(() => loadUnverifiedProfile.IsCompleted);
+                loadUnverifiedProfile.GetAwaiter().GetResult();
+                stage = "injecting frame with unverified mapping";
+                InjectTransportBytesThroughRealLiveService(live, new byte[] { 0xFB, 0xFB, 0x38, 0x0C, 0xFF });
+                Application.DoEvents();
+                Assert.Single(posted);
+                Assert.Empty(rcmLive.GetDecodedSignalSnapshot());
+                Assert.Equal(string.Empty, Convert.ToString(
+                    rawGrid.Rows[3].Cells["interpretationColumn"].Value));
                 stage = "disposing MainForm";
             }
             finally
             {
                 if (File.Exists(profilePath)) File.Delete(profilePath);
+                if (File.Exists(unverifiedProfilePath)) File.Delete(unverifiedProfilePath);
                 if (Directory.Exists(folder)) Directory.Delete(folder);
             }
         }, () => stage);

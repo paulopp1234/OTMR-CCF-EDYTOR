@@ -58,12 +58,15 @@ public partial class OtmrRcmLiveControl : UserControl
         RefreshHeaderStatus();
     }
 
-    internal void ReportRawLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
+    internal void ReportRawLiveFrame(
+        DateTimeOffset timestamp,
+        OtmrLiveFrame frame,
+        CcfEditor.Otmr.Capture.OtmrCaptureEntry? completingCaptureEntry = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (InvokeRequired)
         {
-            BeginInvoke((Action)(() => ReportRawLiveFrame(timestamp, frame)));
+            BeginInvoke((Action)(() => ReportRawLiveFrame(timestamp, frame, completingCaptureEntry)));
             return;
         }
 
@@ -74,7 +77,8 @@ public partial class OtmrRcmLiveControl : UserControl
             timestamp,
             _activeRcmProfilePath is null ? null : Path.GetFileName(_activeRcmProfilePath),
             _activeRcmProfileSha256,
-            _decodedSignals.ToArray()));
+            _decodedSignals.ToArray(),
+            completingCaptureEntry));
     }
 
     internal IReadOnlyList<RcmVerifiedLiveSignal> GetDecodedSignalSnapshot() =>
@@ -166,10 +170,12 @@ internal sealed class VerifiedLiveStateDecodedEventArgs(
     DateTimeOffset timestampUtc,
     string? profileFilename,
     string? profileSha256,
-    IReadOnlyList<RcmVerifiedLiveSignal> signals) : EventArgs
+    IReadOnlyList<RcmVerifiedLiveSignal> signals,
+    CcfEditor.Otmr.Capture.OtmrCaptureEntry? completingCaptureEntry) : EventArgs
 {
     public DateTimeOffset TimestampUtc { get; } = timestampUtc.ToUniversalTime();
     public string? ProfileFilename { get; } = profileFilename;
     public string? ProfileSha256 { get; } = profileSha256;
     public IReadOnlyList<RcmVerifiedLiveSignal> Signals { get; } = signals;
+    public CcfEditor.Otmr.Capture.OtmrCaptureEntry? CompletingCaptureEntry { get; } = completingCaptureEntry;
 }
