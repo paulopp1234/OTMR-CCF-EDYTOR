@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace CcfEditor.Otmr.Server.Tests;
 
@@ -17,6 +18,9 @@ internal sealed class OtmrServerTestFactory(bool failBeforeReceipt = false) : We
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+        // The Windows Event Log provider is unavailable in restricted test
+        // environments; server behaviour is asserted through HTTP/SQLite.
+        builder.ConfigureLogging(logging => logging.ClearProviders());
         builder.ConfigureAppConfiguration((_, configuration) =>
         {
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -29,7 +33,8 @@ internal sealed class OtmrServerTestFactory(bool failBeforeReceipt = false) : We
                 ["OtmrServer:MaximumSessionResultCount"] = "20",
                 ["OtmrServer:MaximumRecordRangeDays"] = "31",
                 ["OtmrServer:MaximumRealtimeSignalUpdates"] = "100",
-                ["OtmrServer:LiveStaleAfterSeconds"] = "30"
+                ["OtmrServer:LiveStaleAfterSeconds"] = "30",
+                ["OtmrServer:WindowsAppOfflineAfterSeconds"] = "30"
             });
         });
         if (failBeforeReceipt)

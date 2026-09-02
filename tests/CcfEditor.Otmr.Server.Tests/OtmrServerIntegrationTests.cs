@@ -285,6 +285,9 @@ public sealed class OtmrServerIntegrationTests
         HttpResponseMessage firstResponse = await client.PostAsync(
             OtmrRealtimeContract.LiveRoute(vehicle), RealtimeJsonContent(first));
         Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Guid appInstanceId = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.OK, (await HeartbeatAsync(
+            client, appInstanceId, true, vehicle, first.SourceConnectionId)).StatusCode);
 
         JsonElement live = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(vehicle));
         Assert.True(live.GetProperty("liveAvailable").GetBoolean());
@@ -346,8 +349,12 @@ public sealed class OtmrServerIntegrationTests
             RealtimeJsonContent(new OtmrRealtimeUpdateRequest(
                 OtmrApiContract.Version, vehicle, startedA.AddSeconds(1), connectionA,
                 "verified-profile.json", new string('C', 64), sessionASignals)))).StatusCode);
+        Guid appInstanceId = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.OK, (await HeartbeatAsync(
+            client, appInstanceId, true, vehicle, connectionA)).StatusCode);
 
         JsonElement liveA = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(vehicle));
+        Assert.Equal(appInstanceId, liveA.GetProperty("windowsAppInstanceId").GetGuid());
         Assert.Equal(connectionA, liveA.GetProperty("sourceConnectionId").GetString());
         Assert.Equal(2, liveA.GetProperty("signals").GetArrayLength());
         Assert.All(liveA.GetProperty("signals").EnumerateArray(), signal =>
@@ -357,10 +364,13 @@ public sealed class OtmrServerIntegrationTests
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
             OtmrRealtimeContract.LiveRoute(vehicle),
             RealtimeJsonContent(SessionStart(vehicle, connectionB, startedB)))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await HeartbeatAsync(
+            client, appInstanceId, true, vehicle, connectionB)).StatusCode);
 
         JsonElement emptyB = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(vehicle));
         Assert.True(emptyB.GetProperty("liveAvailable").GetBoolean());
         Assert.True(emptyB.GetProperty("online").GetBoolean());
+        Assert.Equal(appInstanceId, emptyB.GetProperty("windowsAppInstanceId").GetGuid());
         Assert.Equal(connectionB, emptyB.GetProperty("sourceConnectionId").GetString());
         Assert.Equal(startedB, emptyB.GetProperty("asOfUtc").GetDateTimeOffset());
         Assert.Empty(emptyB.GetProperty("signals").EnumerateArray());
@@ -432,6 +442,8 @@ public sealed class OtmrServerIntegrationTests
             OtmrRealtimeContract.LiveRoute(vehicle), RealtimeJsonContent(update));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await HeartbeatAsync(
+            client, Guid.NewGuid(), true, vehicle, sourceConnectionId)).StatusCode);
         JsonElement live = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(vehicle));
         Assert.Equal(sourceConnectionId, live.GetProperty("sourceConnectionId").GetString());
         Assert.Equal(timestamp, live.GetProperty("asOfUtc").GetDateTimeOffset());
@@ -454,7 +466,7 @@ public sealed class OtmrServerIntegrationTests
     }
 
     [Fact]
-    public async Task OldRealtimeUpdateIsRetainedButExplicitlyReportedStaleAndOffline()
+    public async Task FreshHeartbeatKeepsEventDrivenStateCurrent_ThenTimeoutSuppressesItWithoutDeletingIt()
     {
         using var factory = new OtmrServerTestFactory();
         using HttpClient client = factory.CreateAuthenticatedClient();
@@ -463,15 +475,30 @@ public sealed class OtmrServerIntegrationTests
             "800010", Guid.NewGuid(), oldTimestamp, OtmrRealtimeContract.Active, rawValue: 1);
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
             OtmrRealtimeContract.LiveRoute(update.VehicleIdentifier), RealtimeJsonContent(update))).StatusCode);
+        Guid appInstanceId = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.OK, (await HeartbeatAsync(
+            client, appInstanceId, true, update.VehicleIdentifier, update.SourceConnectionId)).StatusCode);
 
         JsonElement live = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(update.VehicleIdentifier));
         Assert.True(live.GetProperty("liveAvailable").GetBoolean());
-        Assert.True(live.GetProperty("isStale").GetBoolean());
-        Assert.False(live.GetProperty("online").GetBoolean());
+        Assert.False(live.GetProperty("isStale").GetBoolean());
+        Assert.True(live.GetProperty("online").GetBoolean());
+        Assert.True(live.GetProperty("windowsAppOnline").GetBoolean());
         Assert.Equal(30, live.GetProperty("staleAfterSeconds").GetInt32());
         Assert.Equal(oldTimestamp, live.GetProperty("asOfUtc").GetDateTimeOffset());
         Assert.Equal(OtmrRealtimeContract.Active,
             Assert.Single(live.GetProperty("signals").EnumerateArray()).GetProperty("state").GetString());
+
+        await using SqliteConnection database = await OpenDatabaseAsync(factory.DatabasePath);
+        await ExecuteAsync(database,
+            "UPDATE windows_app_presence SET last_heartbeat_utc='2000-01-01T00:00:00.0000000+00:00';");
+        JsonElement offline = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute(update.VehicleIdentifier));
+        Assert.False(offline.GetProperty("windowsAppOnline").GetBoolean());
+        Assert.False(offline.GetProperty("liveAvailable").GetBoolean());
+        Assert.False(offline.GetProperty("online").GetBoolean());
+        Assert.True(offline.GetProperty("isStale").GetBoolean());
+        Assert.Empty(offline.GetProperty("signals").EnumerateArray());
+        Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM live_signal_state;"));
     }
 
     [Fact]
@@ -503,6 +530,46 @@ public sealed class OtmrServerIntegrationTests
         Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM recording_sessions;"));
         Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM server_upload_receipts;"));
         Assert.Equal(0, await ScalarLongAsync(database, "SELECT COUNT(*) FROM live_vehicle_state;"));
+    }
+
+    [Fact]
+    public async Task HeartbeatExposesWindowsPresenceWithoutClaimingOtmrLiveOrCreatingHistory()
+    {
+        using var factory = new OtmrServerTestFactory();
+        using HttpClient anonymous = factory.CreateClient();
+        Guid appA = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await HeartbeatAsync(
+            anonymous, appA, false, null, null)).StatusCode);
+
+        using HttpClient client = factory.CreateAuthenticatedClient();
+        Assert.Equal(HttpStatusCode.OK, (await HeartbeatAsync(
+            client, appA, false, null, null, "0.3.0")).StatusCode);
+
+        JsonElement runningDisconnected = await GetJsonAsync(
+            client, OtmrRealtimeContract.LiveRoute("171804"));
+        Assert.True(runningDisconnected.GetProperty("windowsAppOnline").GetBoolean());
+        Assert.Equal(appA, runningDisconnected.GetProperty("windowsAppInstanceId").GetGuid());
+        Assert.Equal("0.3.0", runningDisconnected.GetProperty("windowsAppVersion").GetString());
+        Assert.NotEqual(default, runningDisconnected.GetProperty("windowsAppLastSeenUtc").GetDateTimeOffset());
+        Assert.Equal(30, runningDisconnected.GetProperty("windowsAppOfflineAfterSeconds").GetInt32());
+        Assert.False(runningDisconnected.GetProperty("liveAvailable").GetBoolean());
+        Assert.False(runningDisconnected.GetProperty("online").GetBoolean());
+        Assert.Empty(runningDisconnected.GetProperty("signals").EnumerateArray());
+
+        Guid appB = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.OK, (await HeartbeatAsync(
+            client, appB, false, null, null, "0.3.0")).StatusCode);
+        JsonElement restarted = await GetJsonAsync(client, OtmrRealtimeContract.LiveRoute("171804"));
+        Assert.Equal(appB, restarted.GetProperty("windowsAppInstanceId").GetGuid());
+        Assert.NotEqual(appA, appB);
+
+        await using SqliteConnection database = await OpenDatabaseAsync(factory.DatabasePath);
+        Assert.Equal(1, await ScalarLongAsync(database, "SELECT COUNT(*) FROM windows_app_presence;"));
+        Assert.Equal(0, await ScalarLongAsync(database, "SELECT COUNT(*) FROM recording_sessions;"));
+        Assert.Equal(0, await ScalarLongAsync(database, "SELECT COUNT(*) FROM server_upload_receipts;"));
+        string schema = await ScalarTextAsync(database,
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='windows_app_presence';");
+        Assert.DoesNotContain("token", schema, StringComparison.OrdinalIgnoreCase);
     }
 
     private static OtmrRealtimeUpdateRequest RealtimeUpdate(
@@ -552,6 +619,30 @@ public sealed class OtmrServerIntegrationTests
     private static StringContent RealtimeJsonContent(OtmrRealtimeUpdateRequest update) =>
         new(JsonSerializer.Serialize(update, OtmrApiV1Json.Options), Encoding.UTF8, "application/json");
 
+    private static Task<HttpResponseMessage> HeartbeatAsync(
+        HttpClient client,
+        Guid appInstanceId,
+        bool otmrLiveConnected,
+        string? vehicleIdentifier,
+        string? sourceConnectionId,
+        string applicationVersion = "0.3.0")
+    {
+        var heartbeat = new OtmrApplicationHeartbeatRequest(
+            OtmrApiContract.Version,
+            appInstanceId,
+            applicationVersion,
+            DateTimeOffset.UtcNow,
+            otmrLiveConnected,
+            vehicleIdentifier,
+            sourceConnectionId);
+        return client.PostAsync(
+            OtmrApplicationHeartbeatContract.Route,
+            new StringContent(
+                JsonSerializer.Serialize(heartbeat, OtmrApiV1Json.Options),
+                Encoding.UTF8,
+                "application/json"));
+    }
+
     private static async Task<HttpResponseMessage> UploadAsync(HttpClient client, OtmrApiV1UploadRequest package)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, OtmrApiContract.AtomicSessionUploadRoute);
@@ -580,6 +671,13 @@ public sealed class OtmrServerIntegrationTests
     {
         await using SqliteCommand command = connection.CreateCommand(); command.CommandText = sql;
         return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task ExecuteAsync(SqliteConnection connection, string sql)
+    {
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static async Task<string> ScalarTextAsync(SqliteConnection connection, string sql)

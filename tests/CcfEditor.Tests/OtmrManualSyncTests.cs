@@ -205,9 +205,12 @@ public sealed class OtmrManualSyncTests
             Assert.DoesNotContain(token, settings.ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain(token, settings.ToManualConfiguration().ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain(token, settings.ToRealtimeConfiguration().ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(token, settings.ToHeartbeatConfiguration().ToString(), StringComparison.Ordinal);
             Assert.Equal(token, loaded.ApiToken);
             Assert.True(loaded.RealtimePublishingEnabled);
             Assert.Equal(token, loaded.ToRealtimeConfiguration().ApiToken);
+            Assert.True(loaded.ToHeartbeatConfiguration().Enabled);
+            Assert.Equal(token, loaded.ToHeartbeatConfiguration().ApiToken);
         }
         finally
         {

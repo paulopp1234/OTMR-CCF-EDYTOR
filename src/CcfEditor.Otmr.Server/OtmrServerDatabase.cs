@@ -29,6 +29,10 @@ public enum OtmrLiveUpdateDisposition
     OlderSessionStart
 }
 
+public sealed record OtmrApplicationHeartbeatReceipt(
+    Guid AppInstanceId,
+    DateTimeOffset LastHeartbeatUtc);
+
 public interface IOtmrUploadPersistenceHook
 {
     Task BeforeReceiptAsync(OtmrApiV1UploadRequest request, CancellationToken cancellationToken);
@@ -49,14 +53,20 @@ public interface IOtmrServerDatabase
     Task<IReadOnlyList<OtmrHistoricalRecord>> GetRecordsAsync(string vehicleIdentifier, DateTimeOffset fromUtc, DateTimeOffset toUtc, int maximum, CancellationToken cancellationToken = default);
     Task<OtmrVehicleConfiguration?> GetConfigurationAsync(string vehicleIdentifier, CancellationToken cancellationToken = default);
     Task<OtmrLiveUpdateDisposition> StoreLiveUpdateAsync(OtmrRealtimeUpdateRequest request, CancellationToken cancellationToken = default);
-    Task<OtmrLiveAvailability> GetLiveAsync(string vehicleIdentifier, DateTimeOffset nowUtc, TimeSpan staleAfter, CancellationToken cancellationToken = default);
+    Task<OtmrApplicationHeartbeatReceipt> StoreApplicationHeartbeatAsync(OtmrApplicationHeartbeatRequest request, CancellationToken cancellationToken = default);
+    Task<OtmrLiveAvailability> GetLiveAsync(
+        string vehicleIdentifier,
+        DateTimeOffset nowUtc,
+        TimeSpan staleAfter,
+        TimeSpan windowsAppOfflineAfter,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class OtmrServerDatabase(
     IOptions<OtmrServerOptions> options,
     IOtmrUploadPersistenceHook persistenceHook) : IOtmrServerDatabase
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     private readonly OtmrServerOptions _options = options.Value;
     private readonly IOtmrUploadPersistenceHook _persistenceHook = persistenceHook;
     public string DatabasePath => _options.DatabasePath;
@@ -313,13 +323,73 @@ public sealed class OtmrServerDatabase(
         return OtmrLiveUpdateDisposition.Accepted;
     }
 
+    public async Task<OtmrApplicationHeartbeatReceipt> StoreApplicationHeartbeatAsync(
+        OtmrApplicationHeartbeatRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        DateTimeOffset receivedUtc = DateTimeOffset.UtcNow;
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO windows_app_presence(
+                singleton_id, app_instance_id, last_heartbeat_utc, reported_utc,
+                application_version, otmr_live_connected, vehicle_identifier, source_connection_id)
+            VALUES(1,$instance,$lastSeen,$reported,$version,$live,$vehicle,$source)
+            ON CONFLICT(singleton_id) DO UPDATE SET
+                app_instance_id=excluded.app_instance_id,
+                last_heartbeat_utc=excluded.last_heartbeat_utc,
+                reported_utc=excluded.reported_utc,
+                application_version=excluded.application_version,
+                otmr_live_connected=excluded.otmr_live_connected,
+                vehicle_identifier=excluded.vehicle_identifier,
+                source_connection_id=excluded.source_connection_id;
+            """;
+        Add(command, "$instance", request.AppInstanceId.ToString("D"));
+        Add(command, "$lastSeen", UtcText(receivedUtc));
+        Add(command, "$reported", UtcText(request.TimestampUtc));
+        Add(command, "$version", request.ApplicationVersion);
+        Add(command, "$live", request.OtmrLiveConnected ? 1 : 0);
+        Add(command, "$vehicle", request.VehicleIdentifier);
+        Add(command, "$source", request.SourceConnectionId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return new(request.AppInstanceId, receivedUtc);
+    }
+
     public async Task<OtmrLiveAvailability> GetLiveAsync(
         string vehicleIdentifier,
         DateTimeOffset nowUtc,
         TimeSpan staleAfter,
+        TimeSpan windowsAppOfflineAfter,
         CancellationToken cancellationToken = default)
     {
         await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        DateTimeOffset? windowsLastSeenUtc = null;
+        Guid? windowsInstanceId = null;
+        string? windowsVersion = null;
+        bool windowsReportedOtmrLive = false;
+        string? windowsVehicleIdentifier = null;
+        string? windowsSourceConnectionId = null;
+        await using (SqliteCommand presence = connection.CreateCommand())
+        {
+            presence.CommandText = """
+                SELECT app_instance_id, last_heartbeat_utc, application_version,
+                       otmr_live_connected, vehicle_identifier, source_connection_id
+                FROM windows_app_presence WHERE singleton_id=1;
+                """;
+            await using SqliteDataReader reader = await presence.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                windowsInstanceId = Guid.Parse(reader.GetString(0));
+                windowsLastSeenUtc = ParseUtc(reader.GetString(1));
+                windowsVersion = reader.GetString(2);
+                windowsReportedOtmrLive = reader.GetInt32(3) != 0;
+                windowsVehicleIdentifier = NullableText(reader, 4);
+                windowsSourceConnectionId = NullableText(reader, 5);
+            }
+        }
+        bool windowsOnline = windowsLastSeenUtc.HasValue &&
+            nowUtc.ToUniversalTime() - windowsLastSeenUtc.Value <= windowsAppOfflineAfter;
+
         DateTimeOffset? asOfUtc;
         string? sourceConnectionId;
         string? profileFilename;
@@ -336,7 +406,9 @@ public sealed class OtmrServerDatabase(
             {
                 return new(vehicleIdentifier, false, null, false, false,
                     checked((int)staleAfter.TotalSeconds), null, null, null,
-                    Array.Empty<OtmrLiveSignalState>());
+                    Array.Empty<OtmrLiveSignalState>(), windowsOnline,
+                    windowsLastSeenUtc, windowsInstanceId, windowsVersion,
+                    checked((int)windowsAppOfflineAfter.TotalSeconds));
             }
             asOfUtc = ParseUtc(reader.GetString(0));
             sourceConnectionId = NullableText(reader, 1);
@@ -344,39 +416,46 @@ public sealed class OtmrServerDatabase(
             profileSha256 = NullableText(reader, 3);
         }
 
+        bool otmrOnline = windowsOnline && windowsReportedOtmrLive &&
+            string.Equals(windowsVehicleIdentifier, vehicleIdentifier, StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(sourceConnectionId) &&
+            string.Equals(windowsSourceConnectionId, sourceConnectionId, StringComparison.Ordinal);
         var signals = new List<OtmrLiveSignalState>();
-        await using (SqliteCommand command = connection.CreateCommand())
+        if (otmrOnline)
         {
+            await using SqliteCommand command = connection.CreateCommand();
             command.CommandText = """
-                SELECT signal_id, connector, pin, function, logical_card, logical_channel,
-                       state, raw_value, observed_bit_value, verification, updated_utc
-                FROM live_signal_state
-                WHERE vehicle_identifier=$vehicle
-                ORDER BY connector, pin, signal_id;
-                """;
+                    SELECT signal_id, connector, pin, function, logical_card, logical_channel,
+                           state, raw_value, observed_bit_value, verification, updated_utc
+                    FROM live_signal_state
+                    WHERE vehicle_identifier=$vehicle
+                    ORDER BY connector, pin, signal_id;
+                    """;
             command.Parameters.AddWithValue("$vehicle", vehicleIdentifier);
-            await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            await using SqliteDataReader signalReader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await signalReader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 signals.Add(new(
-                    Guid.Parse(reader.GetString(0)),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.GetString(3),
-                    reader.IsDBNull(4) ? null : reader.GetInt32(4),
-                    reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                    reader.GetString(6),
-                    reader.GetInt32(7),
-                    reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                    reader.GetString(9),
-                    ParseUtc(reader.GetString(10))));
+                    Guid.Parse(signalReader.GetString(0)),
+                    signalReader.GetString(1),
+                    signalReader.GetString(2),
+                    signalReader.GetString(3),
+                    signalReader.IsDBNull(4) ? null : signalReader.GetInt32(4),
+                    signalReader.IsDBNull(5) ? null : signalReader.GetInt32(5),
+                    signalReader.GetString(6),
+                    signalReader.GetInt32(7),
+                    signalReader.IsDBNull(8) ? null : signalReader.GetInt32(8),
+                    signalReader.GetString(9),
+                    ParseUtc(signalReader.GetString(10))));
             }
         }
 
-        bool stale = nowUtc.ToUniversalTime() - asOfUtc.Value > staleAfter;
-        return new(vehicleIdentifier, true, asOfUtc, stale, !stale,
+        bool stale = !otmrOnline;
+        return new(vehicleIdentifier, otmrOnline, asOfUtc, stale, otmrOnline,
             checked((int)staleAfter.TotalSeconds), sourceConnectionId,
-            profileFilename, profileSha256, signals);
+            profileFilename, profileSha256, signals, windowsOnline,
+            windowsLastSeenUtc, windowsInstanceId, windowsVersion,
+            checked((int)windowsAppOfflineAfter.TotalSeconds));
     }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
@@ -531,10 +610,19 @@ public sealed class OtmrServerDatabase(
           raw_value INTEGER NOT NULL, observed_bit_value INTEGER NULL, verification TEXT NOT NULL, updated_utc TEXT NOT NULL,
           PRIMARY KEY(vehicle_identifier,signal_id),
           FOREIGN KEY(vehicle_identifier) REFERENCES live_vehicle_state(vehicle_identifier) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS windows_app_presence(
+          singleton_id INTEGER PRIMARY KEY CHECK(singleton_id=1),
+          app_instance_id TEXT NOT NULL,
+          last_heartbeat_utc TEXT NOT NULL,
+          reported_utc TEXT NOT NULL,
+          application_version TEXT NOT NULL,
+          otmr_live_connected INTEGER NOT NULL,
+          vehicle_identifier TEXT NULL,
+          source_connection_id TEXT NULL);
         CREATE INDEX IF NOT EXISTS ix_recording_sessions_vehicle_started ON recording_sessions(vehicle_identifier,started_utc DESC);
         CREATE INDEX IF NOT EXISTS ix_live_frames_timestamp ON live_frames(timestamp_utc);
         CREATE INDEX IF NOT EXISTS ix_live_signal_vehicle ON live_signal_state(vehicle_identifier);
-        UPDATE schema_info SET schema_version=2, applied_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE schema_version<2;
-        PRAGMA user_version=2;
+        UPDATE schema_info SET schema_version=3, applied_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE schema_version<3;
+        PRAGMA user_version=3;
         """;
 }

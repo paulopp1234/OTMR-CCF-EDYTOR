@@ -361,9 +361,13 @@ The ASP.NET Core server provides authenticated, bounded endpoints for:
 - `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/sessions?offset=...&limit=...`
 - `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/records?fromUtc=...&toUtc=...&limit=...`
 - `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/configuration`
+- `POST /api/v1/otmr/vehicles/{vehicleIdentifier}/live`
 - `GET /api/v1/otmr/vehicles/{vehicleIdentifier}/live`
+- `POST /api/v1/otmr/windows-app/heartbeat`
 
-The records endpoint returns permanently stored complete live-frame evidence in a required, bounded UTC range. All SQL values are parameterized and server-configured result limits are enforced. The live endpoint deliberately returns `liveAvailable: false` and no signals: completed-session synchronization is historical evidence, not realtime telemetry. Only explicitly verified, non-conflicted mappings may appear in any future decoded live API. The external MAUI project's final read DTOs still require joint review.
+The records endpoint returns permanently stored complete live-frame evidence in a required, bounded UTC range. All SQL values are parameterized and server-configured result limits are enforced. Realtime updates remain separate from completed-session uploads and accept only explicitly verified decoded states. A source-connection start resets the current per-vehicle signal generation without fabricating values.
+
+The Windows heartbeat is separately authenticated and identifies one running application process with `appInstanceId`; it does not reuse the OTMR `sourceConnectionId`. `GET /live` adds `windowsAppOnline`, `windowsAppLastSeenUtc`, `windowsAppInstanceId`, `windowsAppVersion`, and `windowsAppOfflineAfterSeconds`. A fresh heartbeat is authoritative for Windows-process presence. Current signals are returned only when that heartbeat also reports a genuine OTMR live session whose vehicle and source connection match the stored live generation. If the app heartbeat expires, or the app is online while OTMR is disconnected, `liveAvailable` and `online` are false and `signals` is empty. Stored genuine signal observations are not rewritten, deleted, or converted to synthetic states.
 
 ## 12. Implemented server acceptance rules and remaining deployment work
 
@@ -374,9 +378,7 @@ Remaining work before production deployment:
 1. Select the production DNS name/Droplet and provision a high-entropy token using an external environment file; establish a rotation procedure for Windows and mobile clients.
 2. Decide the fleet policy for packages whose `vehicleIdentifier` is null. They are preserved but omitted from vehicle-oriented queries.
 3. Measure real long-session payload sizes before designing any future chunked v2 protocol. API v1 remains one atomic request.
-4. Freeze mobile-specific read response DTOs with the separate MAUI repository; current read shapes are a safe historical foundation, not a claim of final mobile UI compatibility.
-5. Design a separate authenticated realtime ingestion path. Never reinterpret completed-session upload as a live feed.
-6. Define retention, monitoring, disk-capacity alerts, bearer-token rotation, and tested off-host backup/restore operations.
-7. A UI/manual command must still be designed before operators invoke synchronization; no automatic network timer was added.
+4. Freeze mobile-specific read response DTOs with the separate Android/MAUI repository, including the additive Windows-presence fields.
+5. Define retention, monitoring, disk-capacity alerts, bearer-token rotation, and tested off-host backup/restore operations.
 
 These blockers do not change the frozen API v1 upload request, acknowledgement, stable identities, or raw-data preservation rules above.

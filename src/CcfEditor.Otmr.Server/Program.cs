@@ -202,6 +202,25 @@ app.MapPost(OtmrRealtimeContract.LiveRouteTemplate, async (
         request.Signals.Count));
 });
 
+app.MapPost(OtmrApplicationHeartbeatContract.Route, async (
+    OtmrApplicationHeartbeatRequest request,
+    IOtmrServerDatabase database,
+    CancellationToken cancellationToken) =>
+{
+    string? validationError = ValidateHeartbeat(request);
+    if (validationError is not null)
+        return ApiError(StatusCodes.Status400BadRequest, null, "INVALID_HEARTBEAT", validationError);
+
+    OtmrApplicationHeartbeatReceipt receipt = await database
+        .StoreApplicationHeartbeatAsync(request, cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Ok(new OtmrApplicationHeartbeatAcknowledgement(
+        OtmrApiContract.Version,
+        receipt.AppInstanceId,
+        Accepted: true,
+        receipt.LastHeartbeatUtc));
+});
+
 app.MapGet(OtmrRealtimeContract.LiveRouteTemplate, async (
     string vehicleIdentifier,
     IOtmrServerDatabase database,
@@ -209,10 +228,12 @@ app.MapGet(OtmrRealtimeContract.LiveRouteTemplate, async (
     CancellationToken cancellationToken) =>
 {
     int staleSeconds = Math.Max(1, configuredOptions.Value.LiveStaleAfterSeconds);
+    int windowsOfflineSeconds = Math.Max(1, configuredOptions.Value.WindowsAppOfflineAfterSeconds);
     OtmrLiveAvailability live = await database.GetLiveAsync(
         vehicleIdentifier,
         DateTimeOffset.UtcNow,
         TimeSpan.FromSeconds(staleSeconds),
+        TimeSpan.FromSeconds(windowsOfflineSeconds),
         cancellationToken).ConfigureAwait(false);
     return Results.Ok(live);
 });
@@ -232,6 +253,25 @@ static bool TryUtc(string? text, out DateTimeOffset value)
         return true;
     }
     return false;
+}
+
+static string? ValidateHeartbeat(OtmrApplicationHeartbeatRequest request)
+{
+    if (request.ApiVersion != OtmrApiContract.Version)
+        return $"apiVersion must be {OtmrApiContract.Version}.";
+    if (request.AppInstanceId == Guid.Empty)
+        return "appInstanceId must be a non-empty GUID.";
+    if (string.IsNullOrWhiteSpace(request.ApplicationVersion) || request.ApplicationVersion.Length > 128)
+        return "applicationVersion is required and must not exceed 128 characters.";
+    if (request.TimestampUtc == default || request.TimestampUtc.Offset != TimeSpan.Zero)
+        return "timestampUtc must be an explicit UTC timestamp.";
+    if (request.VehicleIdentifier?.Length > 128 || request.SourceConnectionId?.Length > 128)
+        return "Heartbeat identifiers must not exceed 128 characters.";
+    if (request.OtmrLiveConnected &&
+        (string.IsNullOrWhiteSpace(request.VehicleIdentifier) ||
+         string.IsNullOrWhiteSpace(request.SourceConnectionId)))
+        return "An active OTMR live heartbeat requires vehicleIdentifier and sourceConnectionId.";
+    return null;
 }
 
 public partial class Program;

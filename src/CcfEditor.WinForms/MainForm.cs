@@ -31,6 +31,7 @@ public partial class MainForm : Form
         otmrLiveControl.GenuineLiveSessionStarted += OtmrLiveControl_GenuineLiveSessionStarted;
         otmrBenchControl.CurrentRcmProfileChanged += OtmrBenchControl_CurrentRcmProfileChanged;
         otmrRcmLiveControl.VerifiedLiveStateDecoded += OtmrRcmLiveControl_VerifiedLiveStateDecoded;
+        ReportApplicationPresenceContext();
     }
 
     private void OpenMenuItem_Click(object? sender, EventArgs e)
@@ -375,6 +376,7 @@ public partial class MainForm : Form
         // creation source cannot lag behind MainForm.
         otmrLiveControl.SetCurrentCcf(_document);
         otmrBenchControl.SetCurrentCcf(_document);
+        ReportApplicationPresenceContext();
     }
 
     private void UpdateStatus(CcfDocument document)

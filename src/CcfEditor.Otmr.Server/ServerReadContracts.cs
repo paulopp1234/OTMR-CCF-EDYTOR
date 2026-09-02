@@ -47,7 +47,12 @@ public sealed record OtmrLiveAvailability(
     string? SourceConnectionId,
     string? RcmProfileFilename,
     string? RcmProfileSha256,
-    IReadOnlyList<OtmrLiveSignalState> Signals);
+    IReadOnlyList<OtmrLiveSignalState> Signals,
+    bool WindowsAppOnline,
+    DateTimeOffset? WindowsAppLastSeenUtc,
+    Guid? WindowsAppInstanceId,
+    string? WindowsAppVersion,
+    int WindowsAppOfflineAfterSeconds);
 
 public sealed record OtmrLiveSignalState(
     Guid SignalId,

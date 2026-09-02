@@ -30,6 +30,14 @@ public sealed class OtmrSyncUserSettings
         AllowInsecureKnownTestServer = AllowInsecureKnownTestServer
     };
 
+    public OtmrApplicationHeartbeatConfiguration ToHeartbeatConfiguration() => new()
+    {
+        ServerUrl = ServerUrl,
+        ApiToken = ApiToken,
+        Enabled = SyncEnabled,
+        AllowInsecureKnownTestServer = AllowInsecureKnownTestServer
+    };
+
     public override string ToString() =>
         $"ServerUrl={ServerUrl}; SyncEnabled={SyncEnabled}; RealtimePublishingEnabled={RealtimePublishingEnabled}; " +
         $"AllowInsecureKnownTestServer={AllowInsecureKnownTestServer}; ApiToken=[REDACTED]";

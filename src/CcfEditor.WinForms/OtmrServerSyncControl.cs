@@ -4,9 +4,9 @@ using CcfEditor.Otmr.Sync;
 namespace CcfEditor.WinForms;
 
 /// <summary>
-/// Deliberate, operator-driven server synchronization UI. Constructing or
-/// displaying this control performs local settings/status reads only; network
-/// access is restricted to the two explicit operator buttons.
+/// Operator-configured server synchronization UI. Completed-session actions
+/// remain deliberate; when saved Server Sync is enabled, the independent
+/// application-presence heartbeat runs asynchronously in the background.
 /// </summary>
 public partial class OtmrServerSyncControl : UserControl
 {
@@ -16,7 +16,9 @@ public partial class OtmrServerSyncControl : UserControl
     private OtmrManualSyncService? _manualSyncService;
     private HttpClient? _syncHttpClient;
     private HttpClient? _realtimeHttpClient;
+    private HttpClient? _heartbeatHttpClient;
     private OtmrRealtimePublisher _realtimePublisher;
+    private OtmrApplicationHeartbeatService _heartbeatService;
     private bool _syncBusy;
     private bool _closing;
     private OtmrRealtimeSourceDiagnostics? _latestRealtimeSourceDiagnostics;
@@ -26,6 +28,11 @@ public partial class OtmrServerSyncControl : UserControl
         InitializeComponent();
         _realtimeHttpClient = new HttpClient();
         _realtimePublisher = new OtmrRealtimePublisher(_realtimeHttpClient);
+        _heartbeatHttpClient = new HttpClient();
+        _heartbeatService = new OtmrApplicationHeartbeatService(
+            _heartbeatHttpClient,
+            OtmrWindowsApplicationIdentity.AppInstanceId,
+            Application.ProductVersion);
         _realtimePublisher.StatusChanged += RealtimePublisher_StatusChanged;
         InitializeManualSyncUi();
         Disposed += OtmrServerSyncControl_Disposed;
@@ -91,6 +98,7 @@ public partial class OtmrServerSyncControl : UserControl
             ? "Token saved securely - enter a new token to replace it"
             : "Enter token to save";
         _realtimePublisher.Configure(_syncSettings.ToRealtimeConfiguration());
+        _heartbeatService.Configure(_syncSettings.ToHeartbeatConfiguration());
     }
 
     private OtmrSyncUserSettings SaveSyncSettingsFromUi()
@@ -109,6 +117,7 @@ public partial class OtmrServerSyncControl : UserControl
         _syncSettingsStore!.Save(proposed);
         _syncSettings = proposed;
         _realtimePublisher.Configure(proposed.ToRealtimeConfiguration());
+        _heartbeatService.Configure(proposed.ToHeartbeatConfiguration());
         syncApiTokenTextBox.Clear();
         syncApiTokenTextBox.PlaceholderText = proposed.HasApiToken
             ? "Token saved securely - enter a new token to replace it"
@@ -126,6 +135,26 @@ public partial class OtmrServerSyncControl : UserControl
     internal OtmrRealtimePublisherStatus RealtimePublisherStatus => _realtimePublisher.Status;
 
     internal OtmrRealtimePublisherDiagnostics RealtimePublisherDiagnostics => _realtimePublisher.Diagnostics;
+
+    internal Guid ApplicationInstanceId => _heartbeatService.AppInstanceId;
+
+    internal OtmrApplicationHeartbeatStatus ApplicationHeartbeatStatus => _heartbeatService.Status;
+
+    internal void ReportApplicationPresenceContext(OtmrApplicationPresenceContext context) =>
+        _heartbeatService.UpdateContext(context);
+
+    internal void ConfigureApplicationHeartbeatForTests(
+        OtmrApplicationHeartbeatService heartbeatService,
+        OtmrApplicationHeartbeatConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(heartbeatService);
+        ArgumentNullException.ThrowIfNull(configuration);
+        _heartbeatService.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _heartbeatHttpClient?.Dispose();
+        _heartbeatHttpClient = null;
+        _heartbeatService = heartbeatService;
+        _heartbeatService.Configure(configuration);
+    }
 
     internal void ReportRealtimeSourceDiagnostics(OtmrRealtimeSourceDiagnostics diagnostics)
     {
@@ -348,7 +377,14 @@ public partial class OtmrServerSyncControl : UserControl
         _realtimePublisher.StatusChanged -= RealtimePublisher_StatusChanged;
         _realtimePublisher.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _realtimeHttpClient?.Dispose();
+        _heartbeatService.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _heartbeatHttpClient?.Dispose();
     }
+}
+
+internal static class OtmrWindowsApplicationIdentity
+{
+    internal static Guid AppInstanceId { get; } = Guid.NewGuid();
 }
 
 internal sealed record OtmrRealtimeSourceDiagnostics(

@@ -13,4 +13,5 @@ public sealed class OtmrServerOptions
     public int MaximumRecordRangeDays { get; set; } = 31;
     public int MaximumRealtimeSignalUpdates { get; set; } = 1_000;
     public int LiveStaleAfterSeconds { get; set; } = 30;
+    public int WindowsAppOfflineAfterSeconds { get; set; } = 30;
 }

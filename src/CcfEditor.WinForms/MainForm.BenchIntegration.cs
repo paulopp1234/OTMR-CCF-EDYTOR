@@ -43,6 +43,18 @@ public partial class MainForm
         }
         otmrBenchControl.SetOtmrLiveState(state);
         otmrRcmLiveControl.SetOtmrLiveState(state);
+        ReportApplicationPresenceContext(state);
+    }
+
+    private void ReportApplicationPresenceContext(OtmrLiveState? state = null)
+    {
+        OtmrLiveState currentState = state ?? otmrLiveControl.State;
+        bool genuineLiveConnected = !string.IsNullOrWhiteSpace(_realtimeSourceConnectionId) &&
+            currentState is OtmrLiveState.LiveReady or OtmrLiveState.LiveActive;
+        otmrServerSyncControl.ReportApplicationPresenceContext(new(
+            genuineLiveConnected,
+            ReadRealtimeVehicleIdentifierFromCcf(),
+            genuineLiveConnected ? _realtimeSourceConnectionId : null));
     }
 
     private void OtmrLiveControl_GenuineLiveSessionStarted(
@@ -51,6 +63,7 @@ public partial class MainForm
     {
         _realtimeSourceConnectionId = e.SourceConnectionId;
         otmrRcmLiveControl.SetSourceConnectionId(e.SourceConnectionId);
+        ReportApplicationPresenceContext();
         (string? profileFilename, string? profileSha256) =
             otmrRcmLiveControl.GetActiveProfileIdentity();
         otmrServerSyncControl.StartRealtimeLiveSession(new OtmrRealtimeSessionStart(
