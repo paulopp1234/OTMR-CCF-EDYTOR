@@ -122,6 +122,7 @@ public sealed class StartupGateTests
     [InlineData("ALLOW_START\r\nALLOW_START")]
     [InlineData("ALLOW_START\n# comment")]
     [InlineData("ALLOW_START\0")]
+    [InlineData("{\"content\":\"QUxMT1dfU1RBUlQK\",\"encoding\":\"base64\"}")]
     public void MalformedOrUnknownStatus_DeniesStartupAsInvalid(string content)
     {
         using var client = Client((_, _) => Response(content));
@@ -165,6 +166,7 @@ public sealed class StartupGateTests
 
     [Theory]
     [InlineData(HttpStatusCode.MovedPermanently)]
+    [InlineData(HttpStatusCode.NotModified)]
     [InlineData(HttpStatusCode.Forbidden)]
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.InternalServerError)]
@@ -246,8 +248,10 @@ public sealed class StartupGateTests
     {
         Assert.Equal(HttpMethod.Get, request.Method);
         Assert.Equal(
-            "https://raw.githubusercontent.com/paulopp1234/OTMR-CCF-EDYTOR/main/OTMR_RCM",
+            "https://api.github.com/repos/paulopp1234/OTMR-CCF-EDYTOR/contents/OTMR_RCM?ref=main",
             request.RequestUri!.AbsoluteUri);
+        Assert.Equal("application/vnd.github.raw+json", Assert.Single(request.Headers.Accept).MediaType);
+        Assert.Equal("OTMR-CcfEditor/0.3", request.Headers.UserAgent.ToString());
         Assert.True(request.Headers.CacheControl!.NoCache);
         Assert.True(request.Headers.CacheControl.NoStore);
         Assert.Equal(TimeSpan.Zero, request.Headers.CacheControl.MaxAge);

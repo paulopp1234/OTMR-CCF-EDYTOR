@@ -213,15 +213,17 @@ Right-click `MainForm.cs` -> **View Designer**.
 
 ## Remote startup gate
 
-Before the WinForms application creates `MainForm`, it reads:
+Before the WinForms application creates `MainForm`, it reads the control file through the GitHub Contents API:
 
-`https://raw.githubusercontent.com/paulopp1234/OTMR-CCF-EDYTOR/main/OTMR_RCM`
+`https://api.github.com/repos/paulopp1234/OTMR-CCF-EDYTOR/contents/OTMR_RCM?ref=main`
+
+Each request includes `Accept: application/vnd.github.raw+json` to retrieve the file body, `User-Agent: OTMR-CcfEditor/0.3`, `Cache-Control: no-cache, no-store, max-age=0`, and `Pragma: no-cache`.
 
 This application's dedicated `OTMR_RCM` file is at the root of its own `paulopp1234/OTMR-CCF-EDYTOR` repository and must contain exactly one status value. The initial value in this checkout is:
 
 `ALLOW_START`
 
-To block this application, change the value to:
+To block this application, change the value on `main` to:
 
 `DO_NOT_START`
 

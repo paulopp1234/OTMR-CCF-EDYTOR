@@ -1,7 +1,13 @@
 OTMR RCM dedicated remote startup gate
 
-Control URL:
-https://raw.githubusercontent.com/paulopp1234/OTMR-CCF-EDYTOR/main/OTMR_RCM
+Control URL (GitHub Contents API):
+https://api.github.com/repos/paulopp1234/OTMR-CCF-EDYTOR/contents/OTMR_RCM?ref=main
+
+Request headers:
+Accept: application/vnd.github.raw+json
+User-Agent: OTMR-CcfEditor/0.3
+Cache-Control: no-cache, no-store, max-age=0
+Pragma: no-cache
 
 This application checks its dedicated OTMR_RCM file at the root of its own
 paulopp1234/OTMR-CCF-EDYTOR repository. This checkout initially contains ALLOW_START.
@@ -16,7 +22,8 @@ DO_NOT_START
 
 Startup order in source:
 1. StartupGate.Check()
-2. Download OTMR_RCM with no-cache/no-store headers and an eight-second timeout
+2. Download the OTMR_RCM file body from main through the Contents API using
+   the headers above and an eight-second timeout
 3. Trim surrounding whitespace/newlines from the complete file contents
 4. If the value is not exactly ALLOW_START: show blocked message and return
 5. ApplicationConfiguration.Initialize()

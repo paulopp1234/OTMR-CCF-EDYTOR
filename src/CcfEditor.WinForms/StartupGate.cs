@@ -11,7 +11,7 @@ internal readonly record struct StartupGateResult(bool IsAllowed, string Status,
 internal static class StartupGate
 {
     internal const string ControlUrl =
-        "https://raw.githubusercontent.com/paulopp1234/OTMR-CCF-EDYTOR/main/OTMR_RCM";
+        "https://api.github.com/repos/paulopp1234/OTMR-CCF-EDYTOR/contents/OTMR_RCM?ref=main";
 
     internal const string AllowedStatus = "ALLOW_START";
     internal const string BlockedStatus = "DO_NOT_START";
@@ -40,6 +40,7 @@ internal static class StartupGate
                 throw new ArgumentOutOfRangeException(nameof(timeout));
 
             using var request = new HttpRequestMessage(HttpMethod.Get, ControlUrl);
+            request.Headers.Accept.ParseAdd("application/vnd.github.raw+json");
             request.Headers.CacheControl = new CacheControlHeaderValue
             {
                 NoCache = true,
