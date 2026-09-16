@@ -215,14 +215,18 @@ Right-click `MainForm.cs` -> **View Designer**.
 
 Before the WinForms application creates `MainForm`, it reads:
 
-`https://raw.githubusercontent.com/paulopp1234/CL380_App_Control/main/status.txt`
+`https://raw.githubusercontent.com/paulopp1234/OTMR-CCF-EDYTOR/main/OTMR_RCM`
 
-This application ignores the existing CL380 control line and checks only its own entry:
+This application's dedicated `OTMR_RCM` file is at the root of its own `paulopp1234/OTMR-CCF-EDYTOR` repository and must contain exactly one status value. The initial value in this checkout is:
 
-`OTMR CCF EDYTOR - ALLOW_START`
+`ALLOW_START`
 
-To block only this application, change that line to:
+To block this application, change the value to:
 
-`OTMR CCF EDYTOR - DO_NOT_START`
+`DO_NOT_START`
 
-The gate is fail-closed. A missing/duplicate OTMR line, unknown or empty status, HTTP error, network failure, timeout, or GitHub being unavailable prevents the application from opening.
+Whitespace and newlines around the value are trimmed; the value is case-sensitive. Additional content, including prefixed control lines or multiple values, is invalid.
+
+The gate is fail-closed. A missing file, unknown or empty status, HTTP error, network/DNS/TLS failure, timeout, or GitHub being unavailable prevents the application from opening. The blocked message identifies OTMR RCM and reports `DO_NOT_START`, `INVALID` for unsupported content, or `UNAVAILABLE` when the file cannot be retrieved and validated.
+
+Every launch makes a fresh request with no-cache/no-store headers and an eight-second timeout. No allowed result is cached between launches, and no local allow fallback exists.

@@ -1,36 +1,42 @@
-CCF Editor per-application remote startup gate
+OTMR RCM dedicated remote startup gate
 
 Control URL:
-https://raw.githubusercontent.com/paulopp1234/CL380_App_Control/main/status.txt
+https://raw.githubusercontent.com/paulopp1234/OTMR-CCF-EDYTOR/main/OTMR_RCM
 
-This application ignores the CL380 control line.
-It checks only the line beginning:
-OTMR CCF EDYTOR - 
+This application checks its dedicated OTMR_RCM file at the root of its own
+paulopp1234/OTMR-CCF-EDYTOR repository. This checkout initially contains ALLOW_START.
+The whole file must contain one case-sensitive status value after trimming
+surrounding whitespace/newlines. Prefixed control lines are unsupported.
 
-Allowed line:
-OTMR CCF EDYTOR - ALLOW_START
+Allowed value:
+ALLOW_START
 
-Blocked line:
-OTMR CCF EDYTOR - DO_NOT_START
+Blocked value:
+DO_NOT_START
 
 Startup order in source:
 1. StartupGate.Check()
-2. Download status.txt with no-cache headers
-3. Locate exactly one OTMR CCF EDYTOR control line
-4. If its status is not exactly ALLOW_START: show blocked message and return
+2. Download OTMR_RCM with no-cache/no-store headers and an eight-second timeout
+3. Trim surrounding whitespace/newlines from the complete file contents
+4. If the value is not exactly ALLOW_START: show blocked message and return
 5. ApplicationConfiguration.Initialize()
 6. new MainForm()
 
 Fail-closed conditions:
-- OTMR CCF EDYTOR - DO_NOT_START
-- OTMR CCF EDYTOR line missing
-- duplicate OTMR CCF EDYTOR lines
+- DO_NOT_START
+- missing file / 404
+- multiple values or additional content
 - empty value
 - unknown value
 - HTTP failure
-- network failure
+- network / DNS / TLS failure
 - timeout
 - GitHub unavailable
 
-No local allow fallback exists.
-The first/general CL380 ALLOW_START or DO_NOT_START line does not control this app.
+Blocked messages begin: OTMR RCM start is not authorised.
+Status is DO_NOT_START for an explicit block, INVALID for empty or unsupported
+content, or UNAVAILABLE when the file cannot be retrieved and validated.
+
+Every launch performs a fresh request. No allowed result is cached between
+launches, and no local allow fallback exists. HTTP handler injection remains
+available to tests without contacting the live control repository.

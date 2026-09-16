@@ -11,9 +11,8 @@ internal readonly record struct StartupGateResult(bool IsAllowed, string Status,
 internal static class StartupGate
 {
     internal const string ControlUrl =
-        "https://raw.githubusercontent.com/paulopp1234/CL380_App_Control/main/status.txt";
+        "https://raw.githubusercontent.com/paulopp1234/OTMR-CCF-EDYTOR/main/OTMR_RCM";
 
-    internal const string AppControlPrefix = "OTMR CCF EDYTOR - ";
     internal const string AllowedStatus = "ALLOW_START";
     internal const string BlockedStatus = "DO_NOT_START";
 
@@ -60,8 +59,8 @@ internal static class StartupGate
             if (!response.IsSuccessStatusCode)
             {
                 return StartupGateResult.Denied(
-                    $"HTTP {(int)response.StatusCode}",
-                    "Remote startup authorisation could not be read.");
+                    "UNAVAILABLE",
+                    $"The OTMR_RCM startup control file could not be validated. HTTP {(int)response.StatusCode}.");
             }
 
             string controlText = response.Content
@@ -69,33 +68,7 @@ internal static class StartupGate
                 .GetAwaiter()
                 .GetResult();
 
-            if (string.IsNullOrWhiteSpace(controlText))
-            {
-                return StartupGateResult.Denied(
-                    "EMPTY",
-                    "Remote startup authorisation was empty.");
-            }
-
-            string[] matchingLines = controlText
-                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-                .Where(line => line.StartsWith(AppControlPrefix, StringComparison.Ordinal))
-                .ToArray();
-
-            if (matchingLines.Length == 0)
-            {
-                return StartupGateResult.Denied(
-                    "MISSING",
-                    $"Required control line '{AppControlPrefix}<status>' was not found.");
-            }
-
-            if (matchingLines.Length != 1)
-            {
-                return StartupGateResult.Denied(
-                    "DUPLICATE",
-                    $"Expected exactly one '{AppControlPrefix}<status>' control line.");
-            }
-
-            string status = matchingLines[0][AppControlPrefix.Length..];
+            string status = controlText.Trim();
 
             if (string.Equals(status, AllowedStatus, StringComparison.Ordinal))
                 return StartupGateResult.Allowed(status);
@@ -104,24 +77,24 @@ internal static class StartupGate
             {
                 return StartupGateResult.Denied(
                     status,
-                    "OTMR CCF Editor startup is remotely disabled.");
+                    "OTMR RCM startup is remotely disabled.");
             }
 
             return StartupGateResult.Denied(
-                status.Length == 0 ? "<empty>" : status,
-                $"Unknown OTMR CCF Editor startup status. Expected '{AllowedStatus}' or '{BlockedStatus}'.");
+                "INVALID",
+                "OTMR_RCM contains an unsupported status value.");
         }
         catch (OperationCanceledException)
         {
             return StartupGateResult.Denied(
-                "TIMEOUT",
-                "Remote startup authorisation check timed out.");
+                "UNAVAILABLE",
+                "The OTMR_RCM startup control file could not be validated. The request timed out.");
         }
         catch (Exception ex)
         {
             return StartupGateResult.Denied(
                 "UNAVAILABLE",
-                $"Remote startup authorisation check failed: {ex.Message}");
+                $"The OTMR_RCM startup control file could not be validated. {ex.Message}");
         }
     }
 }
