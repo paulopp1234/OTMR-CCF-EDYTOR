@@ -66,6 +66,39 @@ public sealed class OtmrLiveFrameAssemblerTests
     }
 
     [Fact]
+    public void ArrowvaleLeadingFfThenSplitFbFbHeader_PreservesAndAssemblesTheFirstFrame()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        Assert.Empty(assembler.Append(new byte[] { 0xFF, 0xFB }));
+        Assert.Equal(1, assembler.BufferedByteCount);
+        OtmrLiveFrame frame = Assert.Single(assembler.Append(
+            new byte[] { 0xFB, 0x38, 0x89, 0x38, 0x88, 0xFF }));
+
+        Assert.Equal(
+            new byte[] { 0xFB, 0xFB, 0x38, 0x89, 0x38, 0x88, 0xFF },
+            frame.GetDataSnapshot());
+        Assert.Equal(0, assembler.BufferedByteCount);
+    }
+
+    [Fact]
+    public void D2StatusBytesBetweenFrames_AreDiscardedWithoutLosingEitherFrame()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        IReadOnlyList<OtmrLiveFrame> frames = assembler.Append(new byte[]
+        {
+            0xFB, 0xFB, 0x38, 0x89, 0xFF,
+            0xD2, 0x0C,
+            0xFB, 0xFB, 0x38, 0x88, 0xFF
+        });
+
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x38, 0x89, 0xFF }, frames[0].GetDataSnapshot());
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x38, 0x88, 0xFF }, frames[1].GetDataSnapshot());
+    }
+
+    [Fact]
     public void PartialFrame_RemainsBufferedUntilTerminatorArrives()
     {
         var assembler = new OtmrLiveFrameAssembler();
@@ -77,6 +110,45 @@ public sealed class OtmrLiveFrameAssemblerTests
 
         Assert.Single(assembler.Append(new byte[] { 0xFF }));
         Assert.Equal(0, assembler.BufferedByteCount);
+    }
+
+    [Fact]
+    public void AppendAnalysisCorrelatesSplitFrameTerminatorAndTrailingOutsideBytes()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        OtmrLiveFrameAppendAnalysis partial = assembler.AppendWithAnalysis(
+            new byte[] { 0xFB, 0xFB, 0x0C });
+        OtmrLiveFrameAppendAnalysis completing = assembler.AppendWithAnalysis(
+            new byte[] { 0xFF, 0xD2, 0x07 });
+
+        Assert.True(partial.HasPartialLiveFrame);
+        Assert.Empty(partial.CompletedFrames);
+        Assert.Empty(partial.OutsideSegments);
+        OtmrLiveFrameCompletion completion = Assert.Single(completing.CompletedFrames);
+        Assert.Equal(new byte[] { 0xFB, 0xFB, 0x0C, 0xFF }, completion.Frame.GetDataSnapshot());
+        Assert.Equal(0, completion.TerminatorChunkOffset);
+        OtmrRxOutsideSegment trailing = Assert.Single(completing.OutsideSegments);
+        Assert.Equal(1, trailing.StartOffset);
+        Assert.Equal(new byte[] { 0xD2, 0x07 }, trailing.Data.ToArray());
+        Assert.False(completing.HasPartialLiveFrame);
+    }
+
+    [Fact]
+    public void AppendAnalysisReportsPureOutsideBytesAndMalformedResynchronisation()
+    {
+        var assembler = new OtmrLiveFrameAssembler();
+
+        OtmrLiveFrameAppendAnalysis outside = assembler.AppendWithAnalysis(new byte[] { 0xD2, 0x28 });
+        OtmrLiveFrameAppendAnalysis malformed = assembler.AppendWithAnalysis(
+            new byte[] { 0xFB, 0xFB, 0x01, 0xFB, 0xFB, 0x0C, 0xFF });
+
+        Assert.Equal(new byte[] { 0xD2, 0x28 }, Assert.Single(outside.OutsideSegments).Data.ToArray());
+        Assert.Empty(outside.CompletedFrames);
+        Assert.Equal(1, malformed.MalformedCandidateCount);
+        Assert.Equal(
+            new byte[] { 0xFB, 0xFB, 0x0C, 0xFF },
+            Assert.Single(malformed.CompletedFrames).Frame.GetDataSnapshot());
     }
 
     [Fact]

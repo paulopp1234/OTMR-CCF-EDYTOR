@@ -28,6 +28,20 @@ public static class RcmResultStates
     };
 }
 
+public static class RcmVerificationStates
+{
+    public const string NotVerified = "NOT_VERIFIED";
+    public const string CandidateFound = "CANDIDATE_FOUND";
+    public const string Eligible = "ELIGIBLE_FOR_VERIFICATION";
+    public const string Verified = "VERIFIED";
+    public const string Conflict = "VERIFICATION_CONFLICT";
+
+    public static IReadOnlySet<string> Allowed { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        NotVerified, CandidateFound, Eligible, Verified, Conflict
+    };
+}
+
 public enum RcmElectricalTestState
 {
     VoltageRemoved,
@@ -36,7 +50,7 @@ public enum RcmElectricalTestState
 
 public sealed class RcmProfile
 {
-    public const string CurrentSchemaVersion = "1.2";
+    public const string CurrentSchemaVersion = "1.3";
 
     public string SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string VehicleType { get; set; } = "Class 171";
@@ -45,6 +59,7 @@ public sealed class RcmProfile
     public long SourceCcfSize { get; set; }
     public DateTimeOffset CreationTimestamp { get; set; }
     public DateTimeOffset LastModifiedTimestamp { get; set; }
+    public int RequiredVerificationRuns { get; set; } = 3;
     public List<RcmConnector> Connectors { get; set; } = new();
     public List<RcmPinProfile> Pins { get; set; } = new();
 
@@ -91,6 +106,8 @@ public sealed class RcmPinProfile
     public RcmStateEvidence VoltageRemoved { get; set; } = new();
     public RcmStateEvidence VoltageApplied24V { get; set; } = new();
     public RcmStateComparison Comparison { get; set; } = new();
+    public List<RcmPhysicalVerificationRun> VerificationRuns { get; set; } = new();
+    public RcmDecoderVerification DecoderVerification { get; set; } = new();
     public string RcmResult { get; set; } = RcmResultStates.NotTested;
 
     [JsonIgnore]
@@ -145,4 +162,70 @@ public sealed class RcmStateComparison
     public List<string> RepeatableDifferences { get; set; } = new();
     public List<string> CandidateTransitionEvidence { get; set; } = new();
     public bool DecoderVerified { get; set; }
+}
+
+public sealed class RcmPhysicalVerificationRun
+{
+    public Guid RunId { get; set; } = Guid.NewGuid();
+    public int RunNumber { get; set; }
+    public DateTimeOffset StartedAt { get; set; }
+    public DateTimeOffset CompletedAt { get; set; }
+    public string Connector { get; set; } = string.Empty;
+    public string Pin { get; set; } = string.Empty;
+    public string Function { get; set; } = string.Empty;
+    public RcmExpectedMappingSnapshot ExpectedCcf { get; set; } = new();
+    public RcmStateEvidence VoltageApplied24V { get; set; } = new();
+    public RcmStateEvidence VoltageRemoved { get; set; } = new();
+    public RcmStateComparison Comparison { get; set; } = new();
+    public List<RcmObservedTransition> CandidateTransitions { get; set; } = new();
+}
+
+public sealed class RcmExpectedMappingSnapshot
+{
+    public int? LogicalCard { get; set; }
+    public int? LogicalChannel { get; set; }
+    public int? RecordA { get; set; }
+    public int? RecordB { get; set; }
+
+    [JsonIgnore]
+    public bool IsComplete => LogicalCard.HasValue && LogicalChannel.HasValue && RecordA.HasValue && RecordB.HasValue;
+}
+
+public sealed class RcmObservedTransition
+{
+    public int RawPosition { get; set; }
+    public int RemovedValue { get; set; }
+    public int AppliedValue { get; set; }
+    public int? Bit { get; set; }
+    public string TransitionPolarity { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string StableKey =>
+        $"{RawPosition:D4}:{RemovedValue:X2}:{AppliedValue:X2}:{(Bit.HasValue ? Bit.Value.ToString() : "byte")}";
+}
+
+public sealed class RcmDecoderVerification
+{
+    public string Status { get; set; } = RcmVerificationStates.NotVerified;
+    public DateTimeOffset? VerifiedAt { get; set; }
+    public string VerificationMethod { get; set; } = string.Empty;
+    public string Connector { get; set; } = string.Empty;
+    public string Pin { get; set; } = string.Empty;
+    public string Function { get; set; } = string.Empty;
+    public RcmExpectedMappingSnapshot ExpectedCcf { get; set; } = new();
+    public RcmObservedTransition? ObservedMapping { get; set; }
+    public int RequiredRunCount { get; set; } = 3;
+    public int SuccessfulRepetitionCount { get; set; }
+    public List<Guid> QualifyingRunIds { get; set; } = new();
+    public DateTimeOffset? ConflictDetectedAt { get; set; }
+    public List<Guid> ContradictoryRunIds { get; set; } = new();
+    public List<RcmVerificationAuditEvent> AuditHistory { get; set; } = new();
+}
+
+public sealed class RcmVerificationAuditEvent
+{
+    public DateTimeOffset Timestamp { get; set; }
+    public string Action { get; set; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+    public List<Guid> RunIds { get; set; } = new();
 }

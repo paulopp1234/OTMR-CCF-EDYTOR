@@ -1,4 +1,9 @@
+using System.Diagnostics;
+using System.Text;
+using System.Threading.Channels;
+using CcfEditor.Core;
 using CcfEditor.Otmr.Capture;
+using CcfEditor.Otmr.Storage;
 using CcfEditor.Otmr.Transport;
 
 namespace CcfEditor.Otmr.Live;
@@ -6,31 +11,68 @@ namespace CcfEditor.Otmr.Live;
 public sealed class OtmrLiveService : IDisposable
 {
     private readonly IOtmrTransport _transport;
+    private readonly SerialOtmrTransport? _serialTransport;
     private readonly object _captureSync = new();
+    private readonly object _diagnosticSync = new();
+    private readonly object _txInterpretationSync = new();
     private readonly object _frameSync = new();
+    private readonly object _liveTransitionTimingSync = new();
     private readonly List<OtmrCaptureEntry> _capture = new();
+    private readonly List<OtmrProtocolDiagnosticEntry> _diagnostics = new();
     private readonly OtmrLiveFrameAssembler _frameAssembler = new();
-    private readonly OtmrByteSequenceDetector _replyDetector =
-        new(OtmrLiveStartProtocol.ExpectedReplyPrefix.Span);
+    private readonly OtmrProtocolFrameAssembler _protocolFrameAssembler = new();
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly object _stateSync = new();
     private readonly OtmrLiveStartTiming _startTiming;
+    private readonly OtmrLiveRestoreTiming _restoreTiming;
+    private Channel<byte[]> _protocolFrames = CreateProtocolChannel();
     private OtmrSerialSettings? _settings;
-    private TaskCompletionSource<bool>? _replyCompletion;
+    private IOtmrRecordingStore? _recordingStore;
+    private IReadOnlyDictionary<byte, byte[]>? _cachedOriginalRecorderPages;
+    private OtmrGeneratedConfigurationExchange? _cachedRestorationExchange;
+    private DateTimeOffset? _liveStoppedAt;
+    private string? _pendingTxInterpretation;
     private OtmrLiveState _state = OtmrLiveState.Disconnected;
+    private string? _sourceConnectionId;
+    private Dictionary<string, long> _liveTransitionTimings = new(StringComparer.Ordinal);
+    private CancellationTokenSource? _liveReceiveWatchdogCancellation;
+    private long _completeLiveFrameCount;
+    private bool _liveTimingTableReported;
     private bool _disposed;
 
     public OtmrLiveService(IOtmrTransport transport, OtmrLiveStartTiming? startTiming = null)
+        : this(transport, startTiming, restoreTiming: null)
+    {
+    }
+
+    internal OtmrLiveService(
+        IOtmrTransport transport,
+        OtmrLiveStartTiming? startTiming,
+        OtmrLiveRestoreTiming? restoreTiming)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _serialTransport = transport as SerialOtmrTransport;
         _startTiming = startTiming ?? OtmrLiveStartTiming.HardwareDefault;
+        _restoreTiming = restoreTiming ?? OtmrLiveRestoreTiming.HardwareDefault;
         _transport.BytesReceived += Transport_BytesReceived;
         _transport.BytesTransmitted += Transport_BytesTransmitted;
         _transport.ErrorOccurred += Transport_ErrorOccurred;
+        if (_serialTransport is not null)
+            _serialTransport.DiagnosticOccurred += SerialTransport_DiagnosticOccurred;
     }
 
     public bool IsConnected => _transport.IsConnected;
     public bool IsLiveActive => State == OtmrLiveState.LiveActive;
+    public bool IsLiveReady => State == OtmrLiveState.LiveReady;
+    public long CompleteLiveFrameCount => Interlocked.Read(ref _completeLiveFrameCount);
+    public string? SourceConnectionId
+    {
+        get
+        {
+            lock (_stateSync)
+                return _sourceConnectionId;
+        }
+    }
     public OtmrLiveState State
     {
         get
@@ -45,6 +87,11 @@ public sealed class OtmrLiveService : IDisposable
     public event EventHandler<OtmrConnectionChangedEventArgs>? ConnectionChanged;
     public event EventHandler<OtmrLiveErrorEventArgs>? ErrorOccurred;
     public event EventHandler<OtmrLiveStateChangedEventArgs>? StateChanged;
+    public event EventHandler<OtmrLiveSessionStartedEventArgs>? LiveSessionStarted;
+    public event EventHandler<OtmrProtocolDiagnosticEventArgs>? DiagnosticAdded;
+
+    public void SetRecordingStore(IOtmrRecordingStore? recordingStore) =>
+        _recordingStore = recordingStore;
 
     public Task ConnectAsync(OtmrSerialSettings settings, CancellationToken cancellationToken = default)
     {
@@ -59,6 +106,7 @@ public sealed class OtmrLiveService : IDisposable
         {
             if (State != OtmrLiveState.Disconnected)
                 throw new InvalidOperationException("Disconnect the current OTMR session before connecting again.");
+
             ResetDetection();
             OtmrSerialSettings idleSettings = settings with { RtsEnable = false, DtrEnable = false };
             _settings = idleSettings;
@@ -77,7 +125,13 @@ public sealed class OtmrLiveService : IDisposable
         }
     }
 
-    public async Task StartLiveAsync(CancellationToken cancellationToken = default)
+    public Task StartLiveAsync(CancellationToken cancellationToken = default) =>
+        StartLiveCoreAsync(selectedCcf: null, cancellationToken);
+
+    public Task StartLiveAsync(CcfDocument selectedCcf, CancellationToken cancellationToken = default) =>
+        StartLiveCoreAsync(selectedCcf, cancellationToken);
+
+    private async Task StartLiveCoreAsync(CcfDocument? selectedCcf, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -86,38 +140,58 @@ public sealed class OtmrLiveService : IDisposable
             if (State != OtmrLiveState.ConnectedIdle || !_transport.IsConnected || _settings is null)
                 throw new InvalidOperationException("Connect the OTMR before starting live output.");
 
-            ResetDetection();
-            var reply = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _replyCompletion = reply;
-            SetState(OtmrLiveState.QuerySent);
-            await _transport.SendAsync(OtmrLiveStartProtocol.ProvenQueryFrame, cancellationToken).ConfigureAwait(false);
-
+            byte[] selectedCcfSnapshot;
             try
             {
-                await reply.Task.WaitAsync(_startTiming.QueryReplyTimeout, cancellationToken).ConfigureAwait(false);
+                selectedCcfSnapshot = ValidateAndSnapshotSelectedCcf(selectedCcf);
             }
-            catch (TimeoutException ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                throw new TimeoutException(
-                    "The OTMR did not return the expected proven 01 01 reply. The candidate live-start frame was not sent.", ex);
+                SetState(OtmrLiveState.RecorderConfigurationWriteBlocked);
+                throw new OtmrConfigurationPreflightException(ex.Message, ex);
             }
-
-            await Task.Delay(_startTiming.AfterReplyDelay, cancellationToken).ConfigureAwait(false);
-            SetState(OtmrLiveState.StartingLive);
-            await _transport.SendAsync(OtmrLiveStartProtocol.CandidateLiveStartFrame, cancellationToken).ConfigureAwait(false);
-            await Task.Delay(_startTiming.AfterLiveCommandDelay, cancellationToken).ConfigureAwait(false);
-
-            await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
-            ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(false, null));
-            await Task.Delay(_startTiming.ReopenDelay, cancellationToken).ConfigureAwait(false);
 
             ResetDetection();
-            OtmrSerialSettings liveSettings = _settings with { RtsEnable = false, DtrEnable = true };
-            // Arm live-frame recognition before opening so an immediate first
-            // serial callback cannot arrive in the prior StartingLive state.
-            SetState(OtmrLiveState.WaitingForLiveFrames);
-            await _transport.ConnectAsync(liveSettings, cancellationToken).ConfigureAwait(false);
-            ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(true, liveSettings.PortName));
+            IReadOnlyDictionary<byte, byte[]> recorderPages =
+                await RunInterrogationAsync(cancellationToken).ConfigureAwait(false);
+
+            OtmrGeneratedConfigurationExchange startExchange;
+            OtmrGeneratedConfigurationExchange restorationExchange;
+            IReadOnlyDictionary<byte, byte[]> frozenPages;
+            try
+            {
+                SetState(OtmrLiveState.PreflightingConfiguration);
+                ValidateRecorderCcfCompatibility(recorderPages, selectedCcfSnapshot);
+                frozenPages = FreezeRecorderPages(recorderPages);
+                startExchange = OtmrConfigurationExchangeGenerator.CreateStart(frozenPages, selectedCcfSnapshot);
+                restorationExchange = OtmrConfigurationExchangeGenerator.CreateStopRestoration(frozenPages);
+                ValidateGeneratedExchange(startExchange, "START");
+                ValidateGeneratedExchange(restorationExchange, "STOP restoration");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                SetState(OtmrLiveState.RecorderConfigurationWriteBlocked);
+                throw new OtmrConfigurationPreflightException(ex.Message, ex);
+            }
+
+            // Commit the frozen snapshot and restoration bytes before write 1/7.
+            // Later interrogation traffic never replaces these objects.
+            _cachedOriginalRecorderPages = frozenPages;
+            _cachedRestorationExchange = restorationExchange;
+            ReportDiagnostic("START preflight passed: selected CCF, six frozen recorder pages, seven START writes, seven restoration writes, framing, lengths, checksums, compatibility, and provenance validated.");
+
+            await ExecuteGeneratedExchangeAsync(startExchange, "START", cancellationToken).ConfigureAwait(false);
+            await WaitForStageAsync(0x13, OtmrLiveState.WaitingFor01_13, cancellationToken).ConfigureAwait(false);
+            long finalReplyCompleted = Stopwatch.GetTimestamp();
+            BeginLiveTransitionTiming(finalReplyCompleted);
+            ReportHighResolutionDiagnosticAt("FINAL_0113_COMPLETE", finalReplyCompleted);
+
+            await PerformFinalLiveTransitionAsync(finalReplyCompleted, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OtmrConfigurationPreflightException)
+        {
+            // Preserve the explicit safety state for the operator and caller.
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -132,8 +206,427 @@ public sealed class OtmrLiveService : IDisposable
         }
         finally
         {
-            _replyCompletion = null;
             _operationLock.Release();
+        }
+    }
+
+    private async Task<IReadOnlyDictionary<byte, byte[]>> RunInterrogationAsync(CancellationToken cancellationToken)
+    {
+        var pages = new Dictionary<byte, byte[]>();
+        await SendAndWaitAsync(OtmrLiveStartProtocol.Query01, 0x01, OtmrLiveState.WaitingFor01_01, cancellationToken).ConfigureAwait(false);
+
+        pages[0x02] = (await WaitForStageAsync(0x02, OtmrLiveState.WaitingFor01_02, cancellationToken).ConfigureAwait(false)).ToArray();
+        await SendPairAsync(OtmrLiveStartProtocol.Acknowledge02, OtmrLiveStartProtocol.Query03, cancellationToken).ConfigureAwait(false);
+        await WaitForStageAsync(0x03, OtmrLiveState.WaitingFor01_03, cancellationToken).ConfigureAwait(false);
+
+        pages[0x04] = (await WaitForStageAsync(0x04, OtmrLiveState.WaitingFor01_04, cancellationToken).ConfigureAwait(false)).ToArray();
+        await SendPairAsync(OtmrLiveStartProtocol.Acknowledge04, OtmrLiveStartProtocol.Query05, cancellationToken).ConfigureAwait(false);
+        await WaitForStageAsync(0x05, OtmrLiveState.WaitingFor01_05, cancellationToken).ConfigureAwait(false);
+
+        pages[0x06] = (await WaitForStageAsync(0x06, OtmrLiveState.WaitingFor01_06, cancellationToken).ConfigureAwait(false)).ToArray();
+        await SendPairAsync(OtmrLiveStartProtocol.Acknowledge06, OtmrLiveStartProtocol.Query07, cancellationToken).ConfigureAwait(false);
+        await WaitForStageAsync(0x07, OtmrLiveState.WaitingFor01_07, cancellationToken).ConfigureAwait(false);
+
+        pages[0x08] = (await WaitForStageAsync(0x08, OtmrLiveState.WaitingFor01_08, cancellationToken).ConfigureAwait(false)).ToArray();
+        await SendPairAsync(OtmrLiveStartProtocol.Acknowledge08, OtmrLiveStartProtocol.Query09, cancellationToken).ConfigureAwait(false);
+        await WaitForStageAsync(0x09, OtmrLiveState.WaitingFor01_09, cancellationToken).ConfigureAwait(false);
+
+        pages[0x0A] = (await WaitForStageAsync(0x0A, OtmrLiveState.WaitingFor01_0A, cancellationToken).ConfigureAwait(false)).ToArray();
+        await SendPairAsync(OtmrLiveStartProtocol.Acknowledge0A, OtmrLiveStartProtocol.Query0B, cancellationToken).ConfigureAwait(false);
+        await WaitForStageAsync(0x0B, OtmrLiveState.WaitingFor01_0B, cancellationToken).ConfigureAwait(false);
+        pages[0x0C] = (await WaitForStageAsync(0x0C, OtmrLiveState.WaitingFor01_0C, cancellationToken).ConfigureAwait(false)).ToArray();
+        return pages;
+    }
+
+    private async Task SendAndWaitAsync(
+        ReadOnlyMemory<byte> write,
+        byte expectedTransaction,
+        OtmrLiveState waitingState,
+        CancellationToken cancellationToken)
+    {
+        SetState(waitingState);
+        await _transport.SendAsync(write, cancellationToken).ConfigureAwait(false);
+        await WaitForExpectedFrameAsync(expectedTransaction, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SendPairAsync(
+        ReadOnlyMemory<byte> first,
+        ReadOnlyMemory<byte> second,
+        CancellationToken cancellationToken)
+    {
+        await _transport.SendAsync(first, cancellationToken).ConfigureAwait(false);
+        await _transport.SendAsync(second, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<byte[]> WaitForStageAsync(
+        byte transaction,
+        OtmrLiveState waitingState,
+        CancellationToken cancellationToken)
+    {
+        SetState(waitingState);
+        return await WaitForExpectedFrameAsync(transaction, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<byte[]> WaitForExpectedFrameAsync(byte transaction, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_startTiming.StageReplyTimeout);
+
+        byte[] frame;
+        try
+        {
+            frame = await _protocolFrames.Reader.ReadAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"The OTMR live-start interrogation timed out waiting for a complete 01 {transaction:X2} frame. " +
+                "No later command or final live-start 01 07 was sent.", ex);
+        }
+        catch (ChannelClosedException ex)
+        {
+            throw new IOException(
+                $"The serial transport failed while waiting for OTMR stage 01 {transaction:X2}.",
+                ex.InnerException ?? ex);
+        }
+
+        if (!OtmrLiveStartProtocol.IsExpectedReply(transaction, frame))
+        {
+            string actual = frame.Length >= 2 ? $"01 {frame[1]:X2}" : "an invalid frame";
+            throw new InvalidDataException(
+                $"Expected OTMR stage 01 {transaction:X2}, but received {actual}. " +
+                "The state machine stopped without sending any later command.");
+        }
+        return frame;
+    }
+
+    private async Task ExecuteGeneratedExchangeAsync(
+        OtmrGeneratedConfigurationExchange exchange,
+        string phase,
+        CancellationToken cancellationToken)
+    {
+        OtmrGeneratedConfigurationWrite first = exchange.Writes[0];
+        long firstStarted = Stopwatch.GetTimestamp();
+        await SendGeneratedWriteAsync(first, phase, 1, cancellationToken).ConfigureAwait(false);
+        ReportDiagnostic(FormatWriteDiagnostic(
+            phase, 1, first, "no intervening reply in capture; paired with write 2/7", Stopwatch.GetElapsedTime(firstStarted)));
+
+        byte[] expectedReplies = { 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12 };
+        OtmrLiveState[] waitingStates =
+        {
+            OtmrLiveState.WaitingFor01_0D, OtmrLiveState.WaitingFor01_0E,
+            OtmrLiveState.WaitingFor01_0F, OtmrLiveState.WaitingFor01_10,
+            OtmrLiveState.WaitingFor01_11, OtmrLiveState.WaitingFor01_12
+        };
+        for (int index = 1; index < exchange.Writes.Count; index++)
+        {
+            OtmrGeneratedConfigurationWrite write = exchange.Writes[index];
+            long started = Stopwatch.GetTimestamp();
+            await SendGeneratedWriteAsync(write, phase, index + 1, cancellationToken).ConfigureAwait(false);
+            await WaitForStageAsync(expectedReplies[index - 1], waitingStates[index - 1], cancellationToken).ConfigureAwait(false);
+            ReportDiagnostic(FormatWriteDiagnostic(
+                phase, index + 1, write, $"reply 01 {expectedReplies[index - 1]:X2} received", Stopwatch.GetElapsedTime(started)));
+        }
+    }
+
+    private async Task SendGeneratedWriteAsync(
+        OtmrGeneratedConfigurationWrite write,
+        string phase,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        string interpretation = $"{phase} WRITE {number}/7 | command/page {write.Bytes[1]:X2} | {write.Bytes.Length} bytes | check {write.Bytes[^2]:X2}";
+        ReportDiagnostic(interpretation + " | transmitting");
+        await SendWithInterpretationAsync(write.Bytes, interpretation, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SendWithInterpretationAsync(
+        ReadOnlyMemory<byte> bytes,
+        string interpretation,
+        CancellationToken cancellationToken)
+    {
+        lock (_txInterpretationSync)
+            _pendingTxInterpretation = interpretation;
+        try
+        {
+            await _transport.SendAsync(bytes, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_txInterpretationSync)
+                _pendingTxInterpretation = null;
+        }
+    }
+
+    private static string FormatWriteDiagnostic(
+        string phase,
+        int number,
+        OtmrGeneratedConfigurationWrite write,
+        string reply,
+        TimeSpan elapsed) =>
+        $"{phase} WRITE {number}/7 | command/page {write.Bytes[1]:X2} | {write.Bytes.Length} bytes | " +
+        $"check {write.Bytes[^2]:X2} | {reply} | elapsed {elapsed.TotalMilliseconds:F4} ms";
+
+    private async Task PerformFinalLiveTransitionAsync(
+        long finalReplyCompleted,
+        CancellationToken cancellationToken)
+    {
+        SetState(OtmrLiveState.StartingLive);
+        long waitBegin = Stopwatch.GetTimestamp();
+        RecordLiveTransitionTiming("FINAL_0113_TO_0107_WAIT_BEGIN", waitBegin);
+        ReportHighResolutionDiagnosticAt(
+            $"FINAL_0113_TO_0107_WAIT_BEGIN | target={_startTiming.FinalReplyToFinalCommandDelay.TotalMilliseconds:F4} ms",
+            waitBegin);
+        if (_startTiming.FinalReplyToFinalCommandDelay > TimeSpan.Zero)
+        {
+            TimeSpan elapsed = Stopwatch.GetElapsedTime(finalReplyCompleted);
+            TimeSpan remaining = _startTiming.FinalReplyToFinalCommandDelay - elapsed;
+            if (remaining > TimeSpan.Zero)
+                await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
+        }
+
+        TimeSpan finalReplyToWaitEnd = Stopwatch.GetElapsedTime(finalReplyCompleted);
+        long waitEnd = Stopwatch.GetTimestamp();
+        RecordLiveTransitionTiming("FINAL_0113_TO_0107_WAIT_END", waitEnd);
+        ReportHighResolutionDiagnosticAt(
+            $"FINAL_0113_TO_0107_WAIT_END | elapsed={finalReplyToWaitEnd.TotalMilliseconds:F4} ms",
+            waitEnd);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION 1/11: final 01 07 write begins");
+        long finalCommandStarted = Stopwatch.GetTimestamp();
+        RecordLiveTransitionTiming("FINAL_0107_TX_BEGIN", finalCommandStarted);
+        TimeSpan finalReplyToTxBegin = Stopwatch.GetElapsedTime(finalReplyCompleted, finalCommandStarted);
+        ReportHighResolutionDiagnosticAt(
+            $"FINAL_0107_TX_BEGIN | elapsed-from-final-0113={finalReplyToTxBegin.TotalMilliseconds:F4} ms",
+            finalCommandStarted);
+        await _transport.SendAsync(OtmrLiveStartProtocol.FinalLiveStart07, cancellationToken).ConfigureAwait(false);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION 2/11: final 01 07 write returned");
+
+        if (_startTiming.FinalCommandToCloseDelay > TimeSpan.Zero)
+        {
+            ReportHighResolutionDiagnostic(
+                $"LIVE TRANSITION 3/11: {_startTiming.FinalCommandToCloseDelay.TotalMilliseconds:F4} ms delay begins");
+            await Task.Delay(_startTiming.FinalCommandToCloseDelay, cancellationToken).ConfigureAwait(false);
+            ReportHighResolutionDiagnostic(
+                $"LIVE TRANSITION 4/11: {_startTiming.FinalCommandToCloseDelay.TotalMilliseconds:F4} ms delay ends");
+        }
+
+        ReportHighResolutionDiagnostic("LIVE TRANSITION: transport disconnect begins");
+        await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION: transport disconnect returned");
+        ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(false, null));
+
+        ResetDetection();
+        OtmrSerialSettings liveSettings = _settings! with { RtsEnable = false, DtrEnable = true };
+        // Arm recognition before opening; the first complete frame may arrive
+        // immediately during the DTR-HIGH reopen callback.
+        SetState(OtmrLiveState.WaitingForLiveFrames);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION 7/11: reopen begins");
+        await _transport.ConnectAsync(liveSettings, cancellationToken).ConfigureAwait(false);
+        ReportHighResolutionDiagnostic("LIVE TRANSITION: transport reopen returned");
+        if (State == OtmrLiveState.WaitingForLiveFrames)
+            SetState(OtmrLiveState.LiveReady);
+        ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(true, liveSettings.PortName));
+        StartLiveReceiveWatchdog();
+    }
+
+    public async Task StopLiveAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (State is not (OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames))
+                throw new InvalidOperationException("Stop Live is available only while live receive is ready or active.");
+            await StopLiveCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    public async Task StopAndRestoreAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (State is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames)
+                await StopLiveCoreAsync(cancellationToken).ConfigureAwait(false);
+            if (State != OtmrLiveState.NotLive || _settings is null)
+                throw new InvalidOperationException("Stop + Restore requires a stopped live session with retained serial settings.");
+            if (_cachedOriginalRecorderPages is null || _cachedRestorationExchange is null)
+                throw new OtmrConfigurationPreflightException("No frozen pre-START recorder snapshot is available for restoration.");
+
+            if (_liveStoppedAt.HasValue)
+            {
+                TimeSpan elapsed = DateTimeOffset.UtcNow - _liveStoppedAt.Value;
+                TimeSpan remaining = _restoreTiming.LiveCloseToRestoreOpenDelay - elapsed;
+                if (remaining > TimeSpan.Zero)
+                    await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
+            }
+
+            ResetDetection();
+            OtmrSerialSettings restoreSettings = _settings with { RtsEnable = false, DtrEnable = false };
+            await _transport.ConnectAsync(restoreSettings, cancellationToken).ConfigureAwait(false);
+            ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(true, restoreSettings.PortName));
+            SetState(OtmrLiveState.RestoringOriginalConfiguration);
+            ReportDiagnostic("STOP + RESTORE opened 38400/8N1, RTS LOW, DTR LOW; beginning captured cleanup interrogation.");
+
+            // Fresh replies gate the cleanup protocol but never replace the
+            // frozen pre-START source used by the restoration generator.
+            await RunInterrogationAsync(cancellationToken).ConfigureAwait(false);
+            ValidateGeneratedExchange(_cachedRestorationExchange, "STOP restoration");
+            await ExecuteGeneratedExchangeAsync(_cachedRestorationExchange, "RESTORE", cancellationToken).ConfigureAwait(false);
+            await WaitForStageAsync(0x13, OtmrLiveState.WaitingFor01_13, cancellationToken).ConfigureAwait(false);
+
+            SetState(OtmrLiveState.RestoringOriginalConfiguration);
+            const string finalRestoreInterpretation =
+                "RESTORE final 01 07 after exact complete 01 13; captured cleanup close follows";
+            ReportDiagnostic(finalRestoreInterpretation);
+            long finalRestoreStarted = Stopwatch.GetTimestamp();
+            await SendWithInterpretationAsync(
+                OtmrLiveStartProtocol.FinalLiveStart07,
+                finalRestoreInterpretation,
+                cancellationToken).ConfigureAwait(false);
+            if (_restoreTiming.FinalCommandToCloseDelay > TimeSpan.Zero)
+                WaitUntilElapsed(finalRestoreStarted, _restoreTiming.FinalCommandToCloseDelay, cancellationToken);
+            await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
+            ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(false, null));
+            ResetDetection();
+            SetState(OtmrLiveState.NotLive);
+            ReportDiagnostic("STOP + RESTORE completed captured cleanup exchange and final close; COM remains closed and realtime is not active.");
+        }
+        catch (OperationCanceledException)
+        {
+            SetState(OtmrLiveState.Error);
+            throw;
+        }
+        catch
+        {
+            SetState(OtmrLiveState.Error);
+            throw;
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    private async Task StopLiveCoreAsync(CancellationToken cancellationToken)
+    {
+        CancelLiveReceiveWatchdog();
+        int txBeforeClose;
+        lock (_captureSync)
+            txBeforeClose = _capture.Count(entry => entry.Direction == OtmrDirection.Tx);
+        await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
+        ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(false, null));
+        ResetDetection();
+        _liveStoppedAt = DateTimeOffset.UtcNow;
+        SetState(OtmrLiveState.NotLive);
+        int txAfterClose;
+        lock (_captureSync)
+            txAfterClose = _capture.Count(entry => entry.Direction == OtmrDirection.Tx);
+        if (txAfterClose != txBeforeClose)
+            throw new InvalidOperationException("Stop Live unexpectedly transmitted serial data.");
+        ReportDiagnostic("STOP LIVE: closed the RTS LOW / DTR HIGH live COM port; no stop command was transmitted. Original configuration remains cached for the separate Stop + Restore operation.");
+    }
+
+    private static byte[] ValidateAndSnapshotSelectedCcf(CcfDocument? selectedCcf)
+    {
+        if (selectedCcf is null)
+            throw new InvalidOperationException("An explicitly selected Class 171 CCF is required before Start OTMR Live.");
+
+        CcfValidationIssue[] errors = CcfValidator.ValidateMilestone1(selectedCcf)
+            .Where(issue => issue.Severity == CcfValidationSeverity.Error)
+            .ToArray();
+        if (errors.Length > 0)
+            throw new InvalidOperationException("Selected CCF validation failed: " + string.Join("; ", errors.Select(issue => issue.Message)));
+
+        byte[] snapshot = selectedCcf.GetWorkingBytesSnapshot();
+        string vehicleType = Encoding.ASCII
+            .GetString(snapshot, CcfFieldDefinitions.Header.VehicleType, 8)
+            .TrimEnd('\0', ' ');
+        if (!string.Equals(vehicleType, "171", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(vehicleType, "Class 171", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Selected CCF vehicle type '{vehicleType}' is not compatible with the Class 171 live workflow.");
+        }
+        return snapshot;
+    }
+
+    private static void ValidateRecorderCcfCompatibility(
+        IReadOnlyDictionary<byte, byte[]> recorderPages,
+        ReadOnlySpan<byte> selectedCcf)
+    {
+        if (!recorderPages.TryGetValue(0x02, out byte[]? page01))
+            throw new InvalidOperationException("Recorder/CCF compatibility cannot be checked because RX 01 02 is missing.");
+        ReadOnlySpan<byte> payload = page01.AsSpan(9, page01.Length - 12);
+        const int ccfIdentityOffset = 0x01B0;
+        const int identityLength = 41;
+        ReadOnlySpan<byte> recorderIdentity = payload.Slice(5, identityLength);
+        ReadOnlySpan<byte> ccfIdentity = selectedCcf.Slice(ccfIdentityOffset, identityLength);
+        if (!recorderIdentity.SequenceEqual(ccfIdentity))
+        {
+            int mismatch = 0;
+            while (mismatch < identityLength && recorderIdentity[mismatch] == ccfIdentity[mismatch])
+                mismatch++;
+            throw new InvalidOperationException(
+                $"Recorder/CCF identity compatibility failed at CCF 0x{ccfIdentityOffset + mismatch:X4}: " +
+                $"recorder {recorderIdentity[mismatch]:X2}, selected CCF {ccfIdentity[mismatch]:X2}.");
+        }
+    }
+
+    private static IReadOnlyDictionary<byte, byte[]> FreezeRecorderPages(
+        IReadOnlyDictionary<byte, byte[]> pages) =>
+        pages.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
+
+    private static void WaitUntilElapsed(long started, TimeSpan targetElapsed, CancellationToken cancellationToken)
+    {
+        // The captured STOP interval is only 4.5618 ms. Windows Task.Delay
+        // commonly rounds this to a 15.6 ms scheduler tick, so measure from
+        // the write start and use a bounded spin for this one short transition.
+        while (Stopwatch.GetElapsedTime(started) < targetElapsed)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Thread.SpinWait(64);
+        }
+    }
+
+    private static void ValidateGeneratedExchange(
+        OtmrGeneratedConfigurationExchange exchange,
+        string phase)
+    {
+        int[] expectedLengths = { 13, 0x10B, 0x10B, 0x10B, 0x10B, 0x10B, 0xD2 };
+        byte[] expectedPayloadLengths = { 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC6 };
+        byte[] expectedCommands = { 0x0C, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06 };
+        if (exchange.Writes.Count != 7)
+            throw new InvalidOperationException($"{phase} generation produced {exchange.Writes.Count} writes; exactly seven are required.");
+
+        for (int index = 0; index < exchange.Writes.Count; index++)
+        {
+            OtmrGeneratedConfigurationWrite write = exchange.Writes[index];
+            byte[] bytes = write.Bytes;
+            if (bytes.Length != expectedLengths[index])
+                throw new InvalidOperationException($"{phase} write {index + 1}/7 length is {bytes.Length}; expected {expectedLengths[index]}.");
+            if (bytes[0] != 0x01 || bytes[1] != expectedCommands[index] || bytes[8] != 0x02 ||
+                bytes[7] != expectedPayloadLengths[index] || bytes[^3] != 0x03 || bytes[^1] != 0x04)
+                throw new InvalidOperationException($"{phase} write {index + 1}/7 framing or ordering validation failed.");
+            if (!OtmrProtocolDerivation.HasValidPayloadCheckByte(bytes))
+                throw new InvalidOperationException($"{phase} write {index + 1}/7 has an invalid calculated payload check byte.");
+            if (write.Provenance.Count != bytes.Length ||
+                write.Provenance.Any(item => string.IsNullOrWhiteSpace(item.SourceReference) ||
+                    !Enum.IsDefined(item.Source)))
+            {
+                throw new InvalidOperationException($"{phase} write {index + 1}/7 has missing or unknown byte provenance.");
+            }
+            for (int offset = 0; offset < bytes.Length; offset++)
+            {
+                OtmrConfigurationByteProvenance provenance = write.Provenance[offset];
+                if (provenance.FrameOffset != offset || provenance.Value != bytes[offset])
+                    throw new InvalidOperationException($"{phase} write {index + 1}/7 provenance mismatch at frame offset 0x{offset:X3}.");
+            }
         }
     }
 
@@ -143,8 +636,12 @@ public sealed class OtmrLiveService : IDisposable
         await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            CancelLiveReceiveWatchdog();
             await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
             _settings = null;
+            _cachedOriginalRecorderPages = null;
+            _cachedRestorationExchange = null;
+            _liveStoppedAt = null;
             ResetDetection();
             SetState(OtmrLiveState.Disconnected);
             ConnectionChanged?.Invoke(this, new OtmrConnectionChangedEventArgs(false, null));
@@ -161,6 +658,12 @@ public sealed class OtmrLiveService : IDisposable
             return _capture.ToArray();
     }
 
+    public IReadOnlyList<OtmrProtocolDiagnosticEntry> GetDiagnosticSnapshot()
+    {
+        lock (_diagnosticSync)
+            return _diagnostics.ToArray();
+    }
+
     public void ClearCapture()
     {
         lock (_captureSync)
@@ -171,76 +674,320 @@ public sealed class OtmrLiveService : IDisposable
     {
         DateTimeOffset timestamp = DateTimeOffset.Now;
 
-        IReadOnlyList<OtmrLiveFrame> frames;
-        bool expectedReply;
+        OtmrLiveFrameAppendAnalysis liveAnalysis;
+        IReadOnlyList<byte[]> protocolFrames;
+        int liveBufferedBytes;
         lock (_frameSync)
         {
-            expectedReply = _replyDetector.Append(e.Data);
-            frames = _frameAssembler.Append(e.Data);
+            protocolFrames = _protocolFrameAssembler.Append(e.Data);
+            liveAnalysis = _frameAssembler.AppendWithAnalysis(e.Data);
+            liveBufferedBytes = _frameAssembler.BufferedByteCount;
+            foreach (byte[] frame in protocolFrames)
+                _protocolFrames.Writer.TryWrite(frame);
         }
 
-        AddCapture(new OtmrCaptureEntry(
-            timestamp,
-            OtmrDirection.Rx,
-            e.Data,
-            expectedReply ? "Expected proven OTMR 01 01 reply detected" : null));
+        string? interpretation = protocolFrames.Count == 0
+            ? null
+            : protocolFrames.Count == 1
+                ? $"Complete OTMR protocol frame 01 {protocolFrames[0][1]:X2} assembled"
+                : $"{protocolFrames.Count} complete OTMR protocol frames assembled";
+        // Preserve the exact RX chunk as one capture row, then carry that same
+        // object with every live frame whose terminating FF arrived in it.
+        var completingCaptureEntry = new OtmrCaptureEntry(timestamp, OtmrDirection.Rx, e.Data, interpretation);
+        AddCapture(completingCaptureEntry, liveAnalysis);
 
-        if (expectedReply && State == OtmrLiveState.QuerySent)
+        bool liveReceptionState = OtmrLiveStartProtocol.CanReceiveLiveFrames(State);
+        if (liveReceptionState && liveAnalysis.CompletedFrames.Count == 0)
         {
-            SetState(OtmrLiveState.OtmrReplied);
-            _replyCompletion?.TrySetResult(true);
+            ReportHighResolutionDiagnostic(
+                $"LIVE_FRAME_ASSEMBLER_BUFFER | buffered-bytes={liveBufferedBytes} | rx-chunk-bytes={e.Data.Length}");
         }
 
-        foreach (OtmrLiveFrame frame in frames)
+        foreach (OtmrLiveFrameCompletion completion in liveAnalysis.CompletedFrames)
         {
-            if (State == OtmrLiveState.WaitingForLiveFrames)
+            OtmrLiveFrame frame = completion.Frame;
+            long totalFrames = Interlocked.Increment(ref _completeLiveFrameCount);
+            ReportHighResolutionDiagnostic(
+                $"LIVE_FRAME_ASSEMBLED | length={frame.Length} | total={totalFrames} | hex={frame.Hex}");
+            if (State is OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.LiveReady)
                 SetState(OtmrLiveState.LiveActive);
-            FrameReceived?.Invoke(this, new OtmrLiveFrameEventArgs(timestamp, frame));
+            _recordingStore?.TryRecordLiveFrame(timestamp, frame);
+            FrameReceived?.Invoke(this, new OtmrLiveFrameEventArgs(timestamp, frame, completingCaptureEntry));
         }
     }
 
     private void Transport_BytesTransmitted(object? sender, OtmrBytesTransmittedEventArgs e)
     {
-        string? interpretation = e.Data.AsSpan().SequenceEqual(OtmrLiveStartProtocol.ProvenQueryFrame.Span)
-            ? "Proven OTMR interrogation/query frame"
-            : e.Data.AsSpan().SequenceEqual(OtmrLiveStartProtocol.CandidateLiveStartFrame.Span)
-                ? "Evidence-backed CANDIDATE Arrowvale live-start frame"
-                : null;
+        string? interpretation;
+        lock (_txInterpretationSync)
+            interpretation = _pendingTxInterpretation;
+        interpretation ??= OtmrLiveStartProtocol.InterpretationForTx(e.Data);
         AddCapture(new OtmrCaptureEntry(DateTimeOffset.Now, OtmrDirection.Tx, e.Data, interpretation));
     }
 
+    private void ReportDiagnostic(string message)
+    {
+        var entry = new OtmrProtocolDiagnosticEntry(DateTimeOffset.Now, message);
+        lock (_diagnosticSync)
+            _diagnostics.Add(entry);
+        DiagnosticAdded?.Invoke(this, new OtmrProtocolDiagnosticEventArgs(entry));
+    }
+
+    private void ReportHighResolutionDiagnostic(string message)
+    {
+        long timestamp = Stopwatch.GetTimestamp();
+        ReportHighResolutionDiagnosticAt(message, timestamp);
+    }
+
+    private void ReportHighResolutionDiagnosticAt(string message, long timestamp) =>
+        ReportDiagnostic($"{message} | stopwatch={timestamp} | frequency={Stopwatch.Frequency}");
+
+    private void SerialTransport_DiagnosticOccurred(object? sender, OtmrTransportDiagnosticEventArgs e)
+    {
+        ReportDiagnostic(
+            $"TRANSPORT {e.Stage}: {e.Detail} | wall={e.Timestamp:O} | " +
+            $"stopwatch={e.StopwatchTimestamp} | frequency={e.StopwatchFrequency}");
+
+        string? timingStage = e.Stage switch
+        {
+            "SERIAL_WRITE_RETURNED" => "SERIAL_WRITE_RETURNED",
+            "SERIALPORT_CLOSE_INVOKED" => "SERIALPORT_CLOSE_INVOKED",
+            "SERIALPORT_CLOSE_RETURNED" => "SERIALPORT_CLOSE_RETURNED",
+            "NATIVE_CREATEFILE_BEGIN" => "NATIVE_CREATEFILE_BEGIN",
+            "NATIVE_CREATEFILE_RETURNED" => "NATIVE_CREATEFILE_RETURNED",
+            "NATIVE_RTS_APPLIED" => "NATIVE_RTS_APPLIED",
+            "NATIVE_DTR_APPLIED" => "NATIVE_DTR_APPLIED",
+            "NATIVE_LINE_CONTROL_APPLIED" => "NATIVE_LINE_CONTROL_APPLIED",
+            "NATIVE_SPECIAL_CHARS_APPLIED" => "NATIVE_SPECIAL_CHARS_APPLIED",
+            "NATIVE_HANDFLOW_APPLIED" => "NATIVE_HANDFLOW_APPLIED",
+            "NATIVE_QUEUE_CONFIGURED" => "NATIVE_QUEUE_CONFIGURED",
+            "NATIVE_PURGE_COMPLETED" => "NATIVE_PURGE_COMPLETED",
+            "NATIVE_TIMEOUTS_APPLIED" => "NATIVE_TIMEOUTS_APPLIED",
+            "NATIVE_VERIFICATION_BEGIN" => "NATIVE_VERIFICATION_BEGIN",
+            "NATIVE_VERIFICATION_COMPLETE" => "NATIVE_VERIFICATION_COMPLETE",
+            "NATIVE_REOPEN_CONFIGURATION_COMPLETE" => "NATIVE_REOPEN_CONFIGURATION_COMPLETE",
+            "NATIVE_READFILE_PENDING" => "NATIVE_READFILE_PENDING",
+            "FIRST_RX_BYTE" => "FIRST_RX_BYTE",
+            _ => null
+        };
+        if (timingStage is not null)
+            RecordLiveTransitionTiming(timingStage, e.StopwatchTimestamp);
+
+        if (e.Stage == "NATIVE_READFILE_RETURNED" && TryGetTransferredByteCount(e.Detail, out long bytes) && bytes > 0)
+            RecordLiveTransitionTiming("NATIVE_FIRST_NONZERO_READFILE_RETURNED", e.StopwatchTimestamp);
+        else if (e.Stage == "FIRST_RX_BYTE")
+            ReportLiveTimingTableOnce("first non-zero native ReadFile return");
+    }
+
+    private void BeginLiveTransitionTiming(long finalReplyCompleted)
+    {
+        CancelLiveReceiveWatchdog();
+        lock (_liveTransitionTimingSync)
+        {
+            _liveTransitionTimings = new Dictionary<string, long>(StringComparer.Ordinal)
+            {
+                ["FINAL_0113_COMPLETE"] = finalReplyCompleted
+            };
+            _liveTimingTableReported = false;
+        }
+    }
+
+    private void RecordLiveTransitionTiming(string stage, long timestamp)
+    {
+        lock (_liveTransitionTimingSync)
+        {
+            if (!_liveTransitionTimings.ContainsKey("FINAL_0113_COMPLETE"))
+                return;
+            _liveTransitionTimings.TryAdd(stage, timestamp);
+        }
+    }
+
+    private void ReportLiveTimingTableOnce(string trigger)
+    {
+        Dictionary<string, long> timings;
+        lock (_liveTransitionTimingSync)
+        {
+            if (_liveTimingTableReported || !_liveTransitionTimings.ContainsKey("FINAL_0113_COMPLETE"))
+                return;
+            _liveTimingTableReported = true;
+            timings = new Dictionary<string, long>(_liveTransitionTimings, StringComparer.Ordinal);
+        }
+
+        (string Label, string Start, string End, string Arrowvale)[] rows =
+        {
+            ("01 13 complete -> final 01 07 begin", "FINAL_0113_COMPLETE", "FINAL_0107_TX_BEGIN", "80.5200 ms"),
+            ("final 01 07 begin -> write return", "FINAL_0107_TX_BEGIN", "SERIAL_WRITE_RETURNED", "not exposed by HHD"),
+            ("final 01 07 begin -> close invocation", "FINAL_0107_TX_BEGIN", "SERIALPORT_CLOSE_INVOKED", "18.8465 ms"),
+            ("close invocation -> close return", "SERIALPORT_CLOSE_INVOKED", "SERIALPORT_CLOSE_RETURNED", "not exposed by HHD"),
+            ("close return -> CreateFile begin", "SERIALPORT_CLOSE_RETURNED", "NATIVE_CREATEFILE_BEGIN", "not exposed by HHD"),
+            ("close invocation -> CreateFile begin", "SERIALPORT_CLOSE_INVOKED", "NATIVE_CREATEFILE_BEGIN", "126.2132 ms"),
+            ("CreateFile begin -> CreateFile return", "NATIVE_CREATEFILE_BEGIN", "NATIVE_CREATEFILE_RETURNED", "11.5482 ms"),
+            ("CreateFile return -> DTR HIGH", "NATIVE_CREATEFILE_RETURNED", "NATIVE_DTR_APPLIED", "3.7462 ms"),
+            ("DTR HIGH -> purge complete", "NATIVE_DTR_APPLIED", "NATIVE_PURGE_COMPLETED", "2.8433 ms"),
+            ("purge complete -> first ReadFile pending", "NATIVE_PURGE_COMPLETED", "NATIVE_READFILE_PENDING", "not exposed by HHD"),
+            ("first ReadFile pending -> first non-zero return", "NATIVE_READFILE_PENDING", "NATIVE_FIRST_NONZERO_READFILE_RETURNED", "not exposed by HHD"),
+            ("DTR HIGH -> first received byte", "NATIVE_DTR_APPLIED", "FIRST_RX_BYTE", "624.0089 ms"),
+            ("timeouts applied -> verification complete", "NATIVE_TIMEOUTS_APPLIED", "NATIVE_VERIFICATION_COMPLETE", "Arrowvale has no post-set verification"),
+            ("verification complete -> first ReadFile pending", "NATIVE_VERIFICATION_COMPLETE", "NATIVE_READFILE_PENDING", "Arrowvale has no post-set verification")
+        };
+
+        ReportDiagnostic($"LIVE_TIMING_TABLE_BEGIN | trigger={trigger}");
+        foreach ((string label, string start, string end, string arrowvale) in rows)
+        {
+            string application = timings.TryGetValue(start, out long startTimestamp) &&
+                timings.TryGetValue(end, out long endTimestamp)
+                ? $"{Stopwatch.GetElapsedTime(startTimestamp, endTimestamp).TotalMilliseconds:F4} ms"
+                : "N/A";
+            ReportDiagnostic($"LIVE_TIMING | {label} | application={application} | Arrowvale={arrowvale}");
+        }
+        ReportDiagnostic("LIVE_TIMING_TABLE_END");
+    }
+
+    private void StartLiveReceiveWatchdog()
+    {
+        if (_serialTransport is null)
+            return;
+
+        var cancellation = new CancellationTokenSource();
+        CancellationTokenSource? previous = Interlocked.Exchange(
+            ref _liveReceiveWatchdogCancellation,
+            cancellation);
+        previous?.Cancel();
+        _ = RunLiveReceiveWatchdogAsync(cancellation);
+    }
+
+    private async Task RunLiveReceiveWatchdogAsync(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token).ConfigureAwait(false);
+            if (State != OtmrLiveState.LiveReady || _serialTransport is null)
+                return;
+            if (!_serialTransport.TryGetNativeLiveReceiveStatus(out NativeLiveReceiveStatistics statistics, out string queueStatus) ||
+                statistics.BytesReceived > 0)
+                return;
+
+            int bufferedBytes;
+            lock (_frameSync)
+                bufferedBytes = _frameAssembler.BufferedByteCount;
+            long dtrTimestamp;
+            lock (_liveTransitionTimingSync)
+                _liveTransitionTimings.TryGetValue("NATIVE_DTR_APPLIED", out dtrTimestamp);
+            string elapsedSinceDtr = dtrTimestamp == 0
+                ? "N/A"
+                : $"{Stopwatch.GetElapsedTime(dtrTimestamp).TotalMilliseconds:F4} ms";
+            ReportDiagnostic(
+                $"LIVE_RX_WATCHDOG | elapsed-since-DTR-HIGH={elapsedSinceDtr} | " +
+                $"ReadFile-submissions={statistics.ReadSubmissions} | zero-byte-completions={statistics.ZeroByteCompletions} | " +
+                $"bytes-received={statistics.BytesReceived} | assembler-buffered-bytes={bufferedBytes} | " +
+                $"complete-live-frames={Interlocked.Read(ref _completeLiveFrameCount)} | {queueStatus}");
+            ReportLiveTimingTableOnce("2-second no-data watchdog");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _liveReceiveWatchdogCancellation, null, cancellation);
+            cancellation.Dispose();
+        }
+    }
+
+    private void CancelLiveReceiveWatchdog()
+    {
+        CancellationTokenSource? cancellation = Interlocked.Exchange(ref _liveReceiveWatchdogCancellation, null);
+        if (cancellation is null)
+            return;
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private static bool TryGetTransferredByteCount(string detail, out long bytes)
+    {
+        const string marker = "bytesTransferred=";
+        int start = detail.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            bytes = 0;
+            return false;
+        }
+        start += marker.Length;
+        int end = detail.IndexOf(';', start);
+        string value = end < 0 ? detail[start..] : detail[start..end];
+        return long.TryParse(value, out bytes);
+    }
+
     private void AddCapture(OtmrCaptureEntry entry)
+        => AddCapture(entry, rxAnalysis: null);
+
+    private void AddCapture(OtmrCaptureEntry entry, OtmrLiveFrameAppendAnalysis? rxAnalysis)
     {
         lock (_captureSync)
             _capture.Add(entry);
-        CaptureAdded?.Invoke(this, new OtmrCaptureEntryEventArgs(entry));
+        _recordingStore?.TryRecordRaw(entry);
+        CaptureAdded?.Invoke(this, new OtmrCaptureEntryEventArgs(entry, rxAnalysis));
     }
 
     private void Transport_ErrorOccurred(object? sender, OtmrTransportErrorEventArgs e)
     {
+        lock (_frameSync)
+            _protocolFrames.Writer.TryComplete(e.Exception);
         SetState(OtmrLiveState.Error);
-        _replyCompletion?.TrySetException(e.Exception);
         ErrorOccurred?.Invoke(this, new OtmrLiveErrorEventArgs(e.Exception));
     }
 
     private void ResetDetection()
     {
+        Interlocked.Exchange(ref _completeLiveFrameCount, 0);
         lock (_frameSync)
         {
             _frameAssembler.Reset();
-            _replyDetector.Reset();
+            _protocolFrameAssembler.Reset();
+            _protocolFrames.Writer.TryComplete();
+            _protocolFrames = CreateProtocolChannel();
         }
     }
 
+    private static Channel<byte[]> CreateProtocolChannel() =>
+        Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false
+        });
+
     private void SetState(OtmrLiveState state)
     {
+        OtmrLiveSessionStartedEventArgs? liveSessionStarted = null;
         lock (_stateSync)
         {
             if (_state == state)
                 return;
             _state = state;
+            if (state is OtmrLiveState.WaitingForLiveFrames or
+                OtmrLiveState.ConnectedIdle or
+                OtmrLiveState.NotLive or
+                OtmrLiveState.Disconnected or
+                OtmrLiveState.Error)
+            {
+                _sourceConnectionId = null;
+            }
+            if (state is OtmrLiveState.LiveReady or OtmrLiveState.LiveActive &&
+                string.IsNullOrWhiteSpace(_sourceConnectionId))
+            {
+                _sourceConnectionId = Guid.NewGuid().ToString("D");
+                liveSessionStarted = new OtmrLiveSessionStartedEventArgs(
+                    _sourceConnectionId, DateTimeOffset.UtcNow);
+            }
         }
         StateChanged?.Invoke(this, new OtmrLiveStateChangedEventArgs(state));
+        if (liveSessionStarted is not null)
+            LiveSessionStarted?.Invoke(this, liveSessionStarted);
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
@@ -249,6 +996,8 @@ public sealed class OtmrLiveService : IDisposable
     {
         if (_disposed)
             return;
+
+        CancelLiveReceiveWatchdog();
 
         try
         {
@@ -263,6 +1012,8 @@ public sealed class OtmrLiveService : IDisposable
         _transport.BytesReceived -= Transport_BytesReceived;
         _transport.BytesTransmitted -= Transport_BytesTransmitted;
         _transport.ErrorOccurred -= Transport_ErrorOccurred;
+        if (_serialTransport is not null)
+            _serialTransport.DiagnosticOccurred -= SerialTransport_DiagnosticOccurred;
         _transport.Dispose();
         _disposed = true;
     }
@@ -270,8 +1021,16 @@ public sealed class OtmrLiveService : IDisposable
 
 public sealed class OtmrCaptureEntryEventArgs : EventArgs
 {
-    public OtmrCaptureEntryEventArgs(OtmrCaptureEntry entry) => Entry = entry;
+    public OtmrCaptureEntryEventArgs(
+        OtmrCaptureEntry entry,
+        OtmrLiveFrameAppendAnalysis? rxAnalysis = null)
+    {
+        Entry = entry;
+        RxAnalysis = rxAnalysis;
+    }
+
     public OtmrCaptureEntry Entry { get; }
+    public OtmrLiveFrameAppendAnalysis? RxAnalysis { get; }
 }
 
 public sealed class OtmrConnectionChangedEventArgs : EventArgs
@@ -289,17 +1048,43 @@ public sealed class OtmrConnectionChangedEventArgs : EventArgs
 public sealed class OtmrLiveFrameEventArgs : EventArgs
 {
     public OtmrLiveFrameEventArgs(DateTimeOffset timestamp, OtmrLiveFrame frame)
+        : this(timestamp, frame, completingCaptureEntry: null)
+    {
+    }
+
+    public OtmrLiveFrameEventArgs(
+        DateTimeOffset timestamp,
+        OtmrLiveFrame frame,
+        OtmrCaptureEntry? completingCaptureEntry)
     {
         Timestamp = timestamp;
         Frame = frame ?? throw new ArgumentNullException(nameof(frame));
+        CompletingCaptureEntry = completingCaptureEntry;
     }
 
     public DateTimeOffset Timestamp { get; }
     public OtmrLiveFrame Frame { get; }
+    public OtmrCaptureEntry? CompletingCaptureEntry { get; }
+}
+
+public sealed record OtmrProtocolDiagnosticEntry(DateTimeOffset Timestamp, string Message);
+
+public sealed class OtmrProtocolDiagnosticEventArgs : EventArgs
+{
+    public OtmrProtocolDiagnosticEventArgs(OtmrProtocolDiagnosticEntry entry) => Entry = entry;
+    public OtmrProtocolDiagnosticEntry Entry { get; }
 }
 
 public sealed class OtmrLiveErrorEventArgs : EventArgs
 {
     public OtmrLiveErrorEventArgs(Exception exception) => Exception = exception;
     public Exception Exception { get; }
+}
+
+public sealed class OtmrLiveSessionStartedEventArgs(
+    string sourceConnectionId,
+    DateTimeOffset startedUtc) : EventArgs
+{
+    public string SourceConnectionId { get; } = sourceConnectionId;
+    public DateTimeOffset StartedUtc { get; } = startedUtc.ToUniversalTime();
 }

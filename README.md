@@ -1,6 +1,13 @@
 # OTMR CCF Editor / Creator — .NET 8 WinForms
 
-Current released application revision: **v0.2**.
+Current released application revision: **v0.3.0**.
+
+> Controlled Class 171 bench validation update (2026-08-25): the application
+> now has an explicit selected-CCF preflight and a reply-gated, byte-proven live
+> START sequence. **Stop Live** is close-only; **Stop + Restore** is a separate
+> captured cleanup/restoration exchange based on frozen pre-START recorder data.
+> This does not claim successful validation on physical OTMR hardware. See
+> `docs/CLASS171_OTMR_CONTROLLED_BENCH_INTEGRATION_20260825.md`.
 
 ## `test` branch — OTMR Live Milestone 1
 
@@ -138,6 +145,7 @@ Milestone 1 captures raw serial bytes but does not yet contain a verified Arrowv
 
 - **v0.1** — initial usable CCF viewer/editor foundation with CCF-only data provenance, Save As protection and per-app startup authorisation.
 - **v0.2** — adds the permanent right-hand Records field-description/schema-help pane, visible application revision and executable version metadata.
+- **v0.3.0** — current desktop application revision with OTMR live, RCM bench/live and manual server-sync foundations.
 
 This is a Visual Studio WinForms Designer project.
 
@@ -205,16 +213,22 @@ Right-click `MainForm.cs` -> **View Designer**.
 
 ## Remote startup gate
 
-Before the WinForms application creates `MainForm`, it reads:
+Before the WinForms application creates `MainForm`, it reads the control file through the GitHub Contents API:
 
-`https://raw.githubusercontent.com/paulopp1234/CL380_App_Control/main/status.txt`
+`https://api.github.com/repos/paulopp1234/OTMR-CCF-EDYTOR/contents/OTMR_RCM?ref=main`
 
-This application ignores the existing CL380 control line and checks only its own entry:
+Each request includes `Accept: application/vnd.github.raw+json` to retrieve the file body, `User-Agent: OTMR-CcfEditor/0.3`, `Cache-Control: no-cache, no-store, max-age=0`, and `Pragma: no-cache`.
 
-`OTMR CCF EDYTOR - ALLOW_START`
+This application's dedicated `OTMR_RCM` file is at the root of its own `paulopp1234/OTMR-CCF-EDYTOR` repository and must contain exactly one status value. The initial value in this checkout is:
 
-To block only this application, change that line to:
+`ALLOW_START`
 
-`OTMR CCF EDYTOR - DO_NOT_START`
+To block this application, change the value on `main` to:
 
-The gate is fail-closed. A missing/duplicate OTMR line, unknown or empty status, HTTP error, network failure, timeout, or GitHub being unavailable prevents the application from opening.
+`DO_NOT_START`
+
+Whitespace and newlines around the value are trimmed; the value is case-sensitive. Additional content, including prefixed control lines or multiple values, is invalid.
+
+The gate is fail-closed. A missing file, unknown or empty status, HTTP error, network/DNS/TLS failure, timeout, or GitHub being unavailable prevents the application from opening. The blocked message identifies OTMR RCM and reports `DO_NOT_START`, `INVALID` for unsupported content, or `UNAVAILABLE` when the file cannot be retrieved and validated.
+
+Every launch makes a fresh request with no-cache/no-store headers and an eight-second timeout. No allowed result is cached between launches, and no local allow fallback exists.
