@@ -50,7 +50,6 @@ internal static class OtmrConfigurationExchangeGenerator
 
         return Create(
             recorderReplies,
-            selectedCcf[CcfFieldDefinitions.Header.Unknown0231],
             selectedCcf[CcfFieldDefinitions.Header.Unknown0263],
             useSelectedCcf: true);
     }
@@ -63,14 +62,12 @@ internal static class OtmrConfigurationExchangeGenerator
         ReadOnlySpan<byte> payload = GetPayload(page01);
         return Create(
             recorderReplies,
-            payload[0x86],
             payload[0xB8],
             useSelectedCcf: false);
     }
 
     private static OtmrGeneratedConfigurationExchange Create(
         IReadOnlyDictionary<byte, byte[]> recorderReplies,
-        byte logicalValue0231,
         byte logicalValue0263,
         bool useSelectedCcf)
     {
@@ -80,7 +77,6 @@ internal static class OtmrConfigurationExchangeGenerator
         SourceByte[] recorderStream = CreateRecorderStream(replies);
         List<SourceByte> transmitStream = TransformPayloadStream(
             recorderStream,
-            logicalValue0231,
             logicalValue0263,
             useSelectedCcf);
 
@@ -141,7 +137,6 @@ internal static class OtmrConfigurationExchangeGenerator
 
     private static List<SourceByte> TransformPayloadStream(
         SourceByte[] source,
-        byte logicalValue0231,
         byte logicalValue0263,
         bool useSelectedCcf)
     {
@@ -159,15 +154,22 @@ internal static class OtmrConfigurationExchangeGenerator
             useSelectedCcf ? OtmrConfigurationByteSource.SelectedCcf : OtmrConfigurationByteSource.RecorderRx,
             useSelectedCcf ? startReference : stopReference));
 
+        byte targetWireMode = unchecked((byte)(0x03 - logicalValue0263));
+        byte headerChecksum = OtmrProtocolDerivation.ComputeClass171WireHeaderChecksum(
+            source[0x86].Value, source[0xB8].Value, targetWireMode);
+        string modeReference = useSelectedCcf
+            ? "CCF 0x0263"
+            : "cached RX 01 02 payload 0xB8";
+
         Constant(0x02, "proven continuous-stream prefix replacement");
         Copy(0x005, 0x086);
-        PhaseValue(
-            unchecked((byte)(0xFE - logicalValue0231)),
-            "CCF 0x0231 transformed as (FE-value) mod 256",
-            "cached RX 01 02 payload 0x86 transformed as (FE-value) mod 256");
+        target.Add(new SourceByte(
+            headerChecksum,
+            OtmrConfigurationByteSource.CalculatedFieldOrChecksum,
+            $"Class 171 header balance: RX 01 02 payload 0x86 + RX 01 02 payload 0xB8 - target TX payload 0xB4 (from {modeReference}) - empirical structural delta 07, modulo 256"));
         Copy(0x087, 0x0B8);
         PhaseValue(
-            unchecked((byte)(0x03 - logicalValue0263)),
+            targetWireMode,
             "CCF 0x0263 transformed as (03-value) mod 256",
             "cached RX 01 02 payload 0xB8 transformed as (03-value) mod 256");
         Copy(0x0B9, page3 + 0x6B);

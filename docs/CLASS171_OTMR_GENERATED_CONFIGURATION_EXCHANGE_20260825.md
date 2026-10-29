@@ -1,3 +1,5 @@
+> **2026-10-29 correction:** The checksum mapping from CCF `0x0231` described below fits the original captured identity only. The implementation now derives the outgoing header check byte from the validated current-recorder header and target mode. See [the correction and validation record](CLASS171_OTMR_HEADER_CHECK_BYTE_20261029.md). The historical capture analysis below is retained for reference.
+
 # Generated Class 171 configuration exchange (non-transmitting)
 
 ## Result and safety boundary
@@ -81,3 +83,4 @@ Closing the live DTR-high serial port stops realtime immediately. Arrowvale
 sends no distinct live-stop command before that first close. It subsequently
 opens an RTS LOW / DTR LOW cleanup session and performs the separate restoration
 interrogation/write exchange generated above.
+

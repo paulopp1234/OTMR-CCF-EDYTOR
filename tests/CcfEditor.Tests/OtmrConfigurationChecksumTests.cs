@@ -149,10 +149,27 @@ public sealed class OtmrConfigurationChecksumTests
 
     private static Dictionary<byte, byte[]> LoadDataReplies(string filename, int first, int last)
     {
-        IReadOnlyList<byte[]> frames = LoadHhdFrames(filename, "Read", first, last);
+        // The original HHD trace supplies TX; its corresponding complete RX
+        // pages are preserved in the software raw capture, as in Milestone 1.
+        IReadOnlyList<byte[]> frames = filename == "HHD_Serial_Trace_20260824_143201.txt"
+            ? LoadOriginalRecorderReplies()
+            : LoadHhdFrames(filename, "Read", first, last);
         return new byte[] { 2, 4, 6, 8, 10, 12 }.ToDictionary(
             transaction => transaction,
-            transaction => Assert.Single(frames, frame => frame[1] == transaction && frame.Length == (transaction == 12 ? 0xD6 : 0x10B)));
+            transaction => Assert.Single(frames.Where(frame => frame[1] == transaction &&
+                frame.Length == (transaction == 12 ? 0xD6 : 0x10B)).DistinctBy(Convert.ToHexString)));
+    }
+
+    private static IReadOnlyList<byte[]> LoadOriginalRecorderReplies()
+    {
+        var stream = new List<byte>();
+        foreach (string line in File.ReadLines(FindTestDataFile("OTMR_RAW_CAPTURE_20260824.txt")))
+        {
+            string[] parts = Regex.Split(line, "  +");
+            if (parts.Length >= 3 && parts[1] == "RX" && line.StartsWith("2026-08-24T14:32:", StringComparison.Ordinal))
+                stream.AddRange(parts[2].Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(value => Convert.ToByte(value, 16)));
+        }
+        return ExtractFrames(stream);
     }
 
     private static IReadOnlyList<byte[]> LoadHhdFrames(string filename, string direction, int first, int last)
@@ -176,6 +193,11 @@ public sealed class OtmrConfigurationChecksumTests
                 selected = false;
         }
 
+        return ExtractFrames(stream);
+    }
+
+    private static IReadOnlyList<byte[]> ExtractFrames(List<byte> stream)
+    {
         var frames = new List<byte[]>();
         for (int offset = 0; offset + 12 <= stream.Count;)
         {

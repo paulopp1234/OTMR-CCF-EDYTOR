@@ -1,3 +1,5 @@
+> **2026-10-29 correction:** The checksum mapping from CCF `0x0231` described below fits the original captured identity only. The implementation now derives the outgoing header check byte from the validated current-recorder header and target mode. See [the correction and validation record](CLASS171_OTMR_HEADER_CHECK_BYTE_20261029.md). The historical capture analysis below is retained for reference.
+
 # Second full HHD session and STOP analysis (2026-08-25)
 
 ## Sources and exchange boundaries
@@ -145,3 +147,4 @@ requires the cleanup exchange merely to cease realtime transmission.
 ```powershell
 & .\tools\Compare-OtmrHhdSessions.ps1 -WriteCsv
 ```
+

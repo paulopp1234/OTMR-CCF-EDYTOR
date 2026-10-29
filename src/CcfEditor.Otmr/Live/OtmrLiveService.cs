@@ -292,13 +292,67 @@ public sealed class OtmrLiveService : IDisposable
 
         if (!OtmrLiveStartProtocol.IsExpectedReply(transaction, frame))
         {
-            string actual = frame.Length >= 2 ? $"01 {frame[1]:X2}" : "an invalid frame";
-            throw new InvalidDataException(
-                $"Expected OTMR stage 01 {transaction:X2}, but received {actual}. " +
-                "The state machine stopped without sending any later command.");
+            throw new InvalidDataException(DescribeUnexpectedProtocolReply(transaction, frame));
         }
         return frame;
     }
+
+    private static string DescribeUnexpectedProtocolReply(byte transaction, ReadOnlySpan<byte> frame)
+    {
+        ReadOnlySpan<byte> expected = transaction switch
+        {
+            0x01 => OtmrLiveStartProtocol.Reply01.Span,
+            0x03 => OtmrLiveStartProtocol.Reply03.Span,
+            0x05 => OtmrLiveStartProtocol.Reply05.Span,
+            0x07 => OtmrLiveStartProtocol.Reply07.Span,
+            0x09 => OtmrLiveStartProtocol.Reply09.Span,
+            0x0B => OtmrLiveStartProtocol.Reply0B.Span,
+            0x0D => OtmrLiveStartProtocol.Reply0D.Span,
+            0x0E => OtmrLiveStartProtocol.Reply0E.Span,
+            0x0F => OtmrLiveStartProtocol.Reply0F.Span,
+            0x10 => OtmrLiveStartProtocol.Reply10.Span,
+            0x11 => OtmrLiveStartProtocol.Reply11.Span,
+            0x12 => OtmrLiveStartProtocol.Reply12.Span,
+            0x13 => OtmrLiveStartProtocol.Reply13.Span,
+            _ => default
+        };
+
+        string expectedDescription;
+        string differenceDescription;
+        if (!expected.IsEmpty)
+        {
+            expectedDescription = $"Expected frame ({expected.Length} bytes): {FormatProtocolHex(expected)}";
+            int difference = 0;
+            while (difference < expected.Length && difference < frame.Length &&
+                   expected[difference] == frame[difference])
+            {
+                difference++;
+            }
+            string expectedByte = difference < expected.Length ? $"{expected[difference]:X2}" : "<end of frame>";
+            string receivedByte = difference < frame.Length ? $"{frame[difference]:X2}" : "<end of frame>";
+            differenceDescription = $"First difference at offset 0x{difference:X4}: expected {expectedByte}, received {receivedByte}.";
+        }
+        else
+        {
+            int expectedLength = transaction == 0x0C ? 0xD6 : 0x10B;
+            byte page = (byte)(transaction / 2);
+            byte flag = transaction == 0x0C ? (byte)0x01 : (byte)0x00;
+            byte payloadLength = transaction == 0x0C ? (byte)0xCA : (byte)0xFF;
+            expectedDescription = $"Expected frame format ({expectedLength} bytes): " +
+                $"01 {transaction:X2} 00 {page:X2} {flag:X2} 01 01 {payloadLength:X2} 02 " +
+                $"[{payloadLength} recorder-specific payload bytes] 03 [check byte] 04";
+            differenceDescription = "The received frame did not satisfy the expected stage's structural checks; payload contents vary by recorder.";
+        }
+
+        return $"Expected OTMR stage 01 {transaction:X2}, but the complete received frame did not match." +
+            Environment.NewLine + expectedDescription +
+            Environment.NewLine + $"Received frame ({frame.Length} bytes): {FormatProtocolHex(frame)}" +
+            Environment.NewLine + differenceDescription +
+            Environment.NewLine + "The state machine stopped without sending any later command.";
+    }
+
+    private static string FormatProtocolHex(ReadOnlySpan<byte> bytes) =>
+        string.Join(" ", bytes.ToArray().Select(value => $"{value:X2}"));
 
     private async Task ExecuteGeneratedExchangeAsync(
         OtmrGeneratedConfigurationExchange exchange,

@@ -3,12 +3,29 @@ using CcfEditor.Core;
 namespace CcfEditor.Otmr.Live;
 
 /// <summary>
-/// Protocol rules proven across the 2026-08-24 HHD TX/RX capture. These
-/// helpers construct bytes only; the live service does not transmit the
-/// blocked 01 0C acknowledgement or any following data write.
+/// Framing and transformation helpers for the captured Class 171 protocol.
+/// These helpers construct bytes only; the live service owns transport and
+/// reply gating.
 /// </summary>
 internal static class OtmrProtocolDerivation
 {
+    // Empirical delta for the captured Class 171 read-header to write-header
+    // transformation. This is not a checksum specification for other formats.
+    private const int Class171HeaderStructuralChecksumDelta = 0x07;
+
+    /// <summary>
+    /// Rebalances the current recorder's header checksum for the target wire
+    /// mode and the captured Class 171 structural conversion. The three golden
+    /// START/STOP exchanges retain this delta. Using the selected CCF's 0x0231
+    /// byte would mix its checksum with identity/wheel bytes copied from RX.
+    /// Hardware acceptance of a newly generated header remains a separate check.
+    /// </summary>
+    internal static byte ComputeClass171WireHeaderChecksum(
+        byte recorderChecksum,
+        byte recorderMode,
+        byte targetWireMode) => unchecked((byte)(
+            recorderChecksum + recorderMode - targetWireMode - Class171HeaderStructuralChecksumDelta));
+
     public static byte ComputePayloadCheckByte(ReadOnlySpan<byte> payload)
     {
         int sum = 0;
@@ -85,9 +102,8 @@ internal static class OtmrProtocolDerivation
 
     /// <summary>
     /// Reconstructs the captured START page-1 write from the current recorder's
-    /// first two read pages and the currently selected CCF. This helper only
-    /// constructs bytes; the live service deliberately does not transmit the
-    /// indexed configuration-write sequence.
+    /// first two read pages and the currently selected CCF's mode. This helper
+    /// constructs bytes without access to a transport.
     /// </summary>
     public static byte[] CreateConfigurationPage01WriteFromCcf(
         ReadOnlySpan<byte> receivedPage01,
@@ -118,19 +134,16 @@ internal static class OtmrProtocolDerivation
         return CreateConfigurationPage01Write(
             receivedPage01,
             receivedPage02,
-            selectedCcf[CcfFieldDefinitions.Header.Unknown0231],
             selectedCcf[CcfFieldDefinitions.Header.Unknown0263]);
     }
 
     /// <summary>
-    /// Encodes the two phase-selected page-1 logical values. Across the two
-    /// authoritative START sessions and the captured STOP restoration, the
-    /// wire values are respectively FE-value and 03-value modulo 256.
+    /// Encodes the phase-selected mode and balances the checksum against the
+    /// current recorder header using the captured Class 171 transformation.
     /// </summary>
     internal static byte[] CreateConfigurationPage01Write(
         ReadOnlySpan<byte> receivedPage01,
         ReadOnlySpan<byte> receivedPage02,
-        byte logicalValue0231,
         byte logicalValue0263)
     {
         ReadOnlySpan<byte> source01 = receivedPage01.Slice(9, receivedPage01.Length - 12);
@@ -143,9 +156,10 @@ internal static class OtmrProtocolDerivation
         Span<byte> payload = write.AsSpan(9, 0xFF);
         payload[0] = 0x02;
         source01[5..0x86].CopyTo(payload[1..0x82]);
-        payload[0x82] = unchecked((byte)(0xFE - logicalValue0231));
+        byte targetWireMode = unchecked((byte)(0x03 - logicalValue0263));
+        payload[0x82] = ComputeClass171WireHeaderChecksum(source01[0x86], source01[0xB8], targetWireMode);
         source01[0x87..0xB8].CopyTo(payload[0x83..0xB4]);
-        payload[0xB4] = unchecked((byte)(0x03 - logicalValue0263));
+        payload[0xB4] = targetWireMode;
         source01[0xB9..].CopyTo(payload[0xB5..0xFB]);
         source02[..4].CopyTo(payload[0xFB..]);
         write[^2] = ComputePayloadCheckByte(payload);

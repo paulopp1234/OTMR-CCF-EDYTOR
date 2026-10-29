@@ -226,7 +226,7 @@ public sealed class OtmrMilestone1Tests
     }
 
     [Fact]
-    public void Page01StartGenerator_UsesSelectedCcfValuesAndReproducesBothCapturedStarts()
+    public void Page01StartGenerator_UsesSelectedCcfModeAndReproducesBothCapturedStarts()
     {
         IReadOnlyDictionary<byte, byte[]> oldReplies = LoadCapturedReplies();
         IReadOnlyList<byte[]> oldWrites = LoadHhdWrites();
@@ -268,7 +268,7 @@ public sealed class OtmrMilestone1Tests
         Assert.Equal(
             stopTx[12],
             OtmrProtocolDerivation.CreateConfigurationPage01Write(
-                stopPage01, stopPage02, currentPage01[0x86], currentPage01[0xB8]));
+                stopPage01, stopPage02, currentPage01[0xB8]));
         Assert.Equal(0xFD, stopTx[12][0x08B]);
         Assert.Equal(0x00, stopTx[12][0x0BD]);
     }
@@ -301,9 +301,12 @@ public sealed class OtmrMilestone1Tests
         OtmrGeneratedConfigurationWrite page01 = newGenerated.Writes[1];
         Assert.Equal(0xFA, page01.Bytes[0x08B]);
         Assert.Equal(0x03, page01.Bytes[0x0BD]);
-        Assert.Equal(OtmrConfigurationByteSource.SelectedCcf, page01.Provenance[0x08B].Source);
+        Assert.Equal(OtmrConfigurationByteSource.CalculatedFieldOrChecksum, page01.Provenance[0x08B].Source);
         Assert.Equal(OtmrConfigurationByteSource.SelectedCcf, page01.Provenance[0x0BD].Source);
-        Assert.Contains("0x0231", page01.Provenance[0x08B].SourceReference);
+        Assert.Contains("RX 01 02 payload 0x86", page01.Provenance[0x08B].SourceReference);
+        Assert.Contains("RX 01 02 payload 0xB8", page01.Provenance[0x08B].SourceReference);
+        Assert.Contains("target TX payload 0xB4", page01.Provenance[0x08B].SourceReference);
+        Assert.DoesNotContain("CCF 0x0231", page01.Provenance[0x08B].SourceReference);
         Assert.Contains("0x0263", page01.Provenance[0x0BD].SourceReference);
 
         byte[] variedCcf = selectedCcf.ToArray();
@@ -311,8 +314,8 @@ public sealed class OtmrMilestone1Tests
         variedCcf[0x0263] = 0xF7;
         OtmrGeneratedConfigurationWrite variedPage01 =
             OtmrConfigurationExchangeGenerator.CreateStart(newReplies, variedCcf).Writes[1];
-        Assert.Equal(unchecked((byte)(0xFE - 0x19)), variedPage01.Bytes[0x08B]);
-        Assert.Equal(unchecked((byte)(0x03 - 0xF7)), variedPage01.Bytes[0x0BD]);
+        Assert.Equal(0xF1, variedPage01.Bytes[0x08B]);
+        Assert.Equal(0x0C, variedPage01.Bytes[0x0BD]);
     }
 
     [Fact]
@@ -332,9 +335,11 @@ public sealed class OtmrMilestone1Tests
         OtmrGeneratedConfigurationWrite page01 = generated.Writes[1];
         Assert.Equal(0xFD, page01.Bytes[0x08B]);
         Assert.Equal(0x00, page01.Bytes[0x0BD]);
-        Assert.Equal(OtmrConfigurationByteSource.RecorderRx, page01.Provenance[0x08B].Source);
+        Assert.Equal(OtmrConfigurationByteSource.CalculatedFieldOrChecksum, page01.Provenance[0x08B].Source);
         Assert.Equal(OtmrConfigurationByteSource.RecorderRx, page01.Provenance[0x0BD].Source);
-        Assert.Contains("cached RX 01 02 payload 0x86", page01.Provenance[0x08B].SourceReference);
+        Assert.Contains("RX 01 02 payload 0x86", page01.Provenance[0x08B].SourceReference);
+        Assert.Contains("RX 01 02 payload 0xB8", page01.Provenance[0x08B].SourceReference);
+        Assert.Contains("target TX payload 0xB4", page01.Provenance[0x08B].SourceReference);
         Assert.Contains("cached RX 01 02 payload 0xB8", page01.Provenance[0x0BD].SourceReference);
     }
 
