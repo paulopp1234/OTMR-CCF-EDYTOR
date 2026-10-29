@@ -62,5 +62,6 @@ public static class CcfFieldDefinitions
         public const int SampleCount = 0x025E;
         public const int DistanceTrigger = 0x025F;
         public const int MidJourney = 0x0261;
+        public const int Unknown0263 = 0x0263;
     }
 }

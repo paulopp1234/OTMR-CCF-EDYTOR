@@ -29,3 +29,26 @@ public sealed class OtmrTransportErrorEventArgs : EventArgs
     public OtmrTransportErrorEventArgs(Exception exception) => Exception = exception;
     public Exception Exception { get; }
 }
+
+public sealed class OtmrTransportDiagnosticEventArgs : EventArgs
+{
+    public OtmrTransportDiagnosticEventArgs(
+        DateTimeOffset timestamp,
+        long stopwatchTimestamp,
+        long stopwatchFrequency,
+        string stage,
+        string detail)
+    {
+        Timestamp = timestamp;
+        StopwatchTimestamp = stopwatchTimestamp;
+        StopwatchFrequency = stopwatchFrequency;
+        Stage = stage;
+        Detail = detail;
+    }
+
+    public DateTimeOffset Timestamp { get; }
+    public long StopwatchTimestamp { get; }
+    public long StopwatchFrequency { get; }
+    public string Stage { get; }
+    public string Detail { get; }
+}

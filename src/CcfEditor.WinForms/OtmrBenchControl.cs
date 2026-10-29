@@ -10,6 +10,7 @@ public partial class OtmrBenchControl : UserControl
 {
     private readonly List<OtmrBenchPinDefinition> _definitions = new();
     private readonly RcmCaptureWindowCoordinator _captureCoordinator = new();
+    private readonly RcmInputTestCoordinator _inputTestCoordinator;
     private CcfDocument? _document;
     private RcmProfile? _rcmProfile;
     private string? _rcmProfilePath;
@@ -25,6 +26,7 @@ public partial class OtmrBenchControl : UserControl
 
     public OtmrBenchControl()
     {
+        _inputTestCoordinator = new RcmInputTestCoordinator(_captureCoordinator);
         InitializeComponent();
         if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
             RcmProfilePaths.EnsureDefaultFolder();
@@ -92,8 +94,14 @@ public partial class OtmrBenchControl : UserControl
 
         _otmrLiveState = state;
         UpdateCommandAvailability();
-        if (state != OtmrLiveState.LiveActive && _captureCoordinator.IsCapturing)
-            statusLabel.Text = "OTMR live stream is no longer active. No further RCM frames will be accepted.";
+        if (!CanAcceptBenchLiveFrames(state) && _inputTestCoordinator.IsRunning)
+        {
+            captureWindowTimer.Stop();
+            armTimeoutTimer.Stop();
+            _inputTestCoordinator.Cancel();
+            UpdateWorkflow();
+            statusLabel.Text = "OTMR live reception stopped. The guided input test was cancelled and partial evidence was discarded.";
+        }
     }
 
     public void ReportRawLiveFrame(DateTimeOffset timestamp, OtmrLiveFrame frame)
@@ -108,14 +116,30 @@ public partial class OtmrBenchControl : UserControl
             return;
         }
 
-        if (_otmrLiveState != OtmrLiveState.LiveActive || !_captureCoordinator.AddFrame(timestamp, frame))
+        if (!CanAcceptBenchLiveFrames(_otmrLiveState) || !_inputTestCoordinator.IsRunning)
             return;
 
-        UpdateCaptureStatusOnly();
-        statusLabel.Text =
-            $"CAPTURING {_captureCoordinator.ActivePinKey}: complete frame retained at " +
-            $"{timestamp.ToLocalTime():HH:mm:ss.fff}. Raw evidence only; decoder NOT VERIFIED.";
+        RcmInputTestFrameResult result = _inputTestCoordinator.AddFrame(timestamp, frame);
+        if (result == RcmInputTestFrameResult.Ignored)
+            return;
+
+        if (result == RcmInputTestFrameResult.TriggeredCapture)
+        {
+            armTimeoutTimer.Stop();
+            captureWindowTimer.Interval = Math.Max(100, decimal.ToInt32(captureSecondsNumeric.Value * 1000M));
+            captureWindowTimer.Start();
+        }
+
+        UpdateInputTestStatusOnly();
+        statusLabel.Text = result == RcmInputTestFrameResult.TriggeredCapture
+            ? $"{DetectionText(_inputTestCoordinator.State)} for {_inputTestCoordinator.ActivePinKey}. " +
+              $"First complete frame retained; capturing for {captureSecondsNumeric.Value:0.0} seconds."
+            : $"CAPTURING {_inputTestCoordinator.ActivePinKey}: complete frame retained at " +
+              $"{timestamp.ToLocalTime():HH:mm:ss.fff}. Raw evidence only; decoder NOT VERIFIED.";
     }
+
+    internal static bool CanAcceptBenchLiveFrames(OtmrLiveState state) =>
+        OtmrLiveStartProtocol.CanReceiveLiveFrames(state);
 
     private RcmPinMapImportResult LoadPinMap(string path)
     {
@@ -174,8 +198,9 @@ public partial class OtmrBenchControl : UserControl
             MessageBox.Show(this, "Load a CCF before creating an RCM profile.", "RCM Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        _rcmProfile = RcmProfileFactory.CreateFromCcf(_document, "Class 171", DateTimeOffset.Now);
-        _rcmProfilePath = null;
+        SetCurrentRcmProfile(
+            RcmProfileFactory.CreateFromCcf(_document, "Class 171", DateTimeOffset.Now),
+            profilePath: null);
         PopulateConnectors();
         RenderTable();
         UpdateCcfStatus();
@@ -198,15 +223,10 @@ public partial class OtmrBenchControl : UserControl
 
         try
         {
-            RcmProfile loaded = await RcmProfileJson.LoadAsync(dialog.FileName);
-            _rcmProfile = loaded;
-            _rcmProfilePath = Path.GetFullPath(dialog.FileName);
-            PopulateConnectors(resetToAll: true);
-            RenderTable();
-            UpdateCcfStatus();
+            await LoadRcmProfileAsync(dialog.FileName);
             statusLabel.Text =
                 $"RCM profile reopened standalone: {Path.GetFileName(_rcmProfilePath)}. " +
-                $"Progress restored; {RcmProfileJson.GetCcfStatus(loaded, _document)}.";
+                $"Progress restored; {RcmProfileJson.GetCcfStatus(_rcmProfile!, _document)}.";
         }
         catch (Exception ex)
         {
@@ -265,6 +285,7 @@ public partial class OtmrBenchControl : UserControl
         try
         {
             await RcmProfileJson.SaveAsync(_rcmProfilePath, _rcmProfile, DateTimeOffset.Now);
+            NotifyCurrentRcmProfileChanged();
             if (showConfirmation)
                 statusLabel.Text = $"RCM progress saved: {_rcmProfilePath}";
         }
@@ -489,15 +510,9 @@ public partial class OtmrBenchControl : UserControl
             UpdateWorkflow();
     }
 
-    private void CaptureVoltageRemovedButton_Click(object? sender, EventArgs e) =>
-        BeginCapture(RcmElectricalTestState.VoltageRemoved);
-
-    private void CaptureVoltageAppliedButton_Click(object? sender, EventArgs e) =>
-        BeginCapture(RcmElectricalTestState.VoltageApplied24V);
-
-    private void BeginCapture(RcmElectricalTestState state)
+    private void StartInputTestButton_Click(object? sender, EventArgs e)
     {
-        if (_otmrLiveState != OtmrLiveState.LiveActive)
+        if (!CanAcceptBenchLiveFrames(_otmrLiveState))
         {
             MessageBox.Show(
                 this,
@@ -514,44 +529,106 @@ public partial class OtmrBenchControl : UserControl
 
         try
         {
-            _captureCoordinator.Begin(pin, state, DateTimeOffset.Now);
-            captureWindowTimer.Interval = Math.Max(100, decimal.ToInt32(captureSecondsNumeric.Value * 1000M));
-            captureWindowTimer.Start();
+            _inputTestCoordinator.Start(pin, DateTimeOffset.Now);
+            armTimeoutTimer.Start();
             RenderTable(pin.Id);
+            UpdateInputTestStatusOnly();
             UpdateCommandAvailability();
-            statusLabel.Text = state == RcmElectricalTestState.VoltageRemoved
-                ? $"CAPTURING {pin.DisplayKey}: operator condition = TEST VOLTAGE REMOVED."
-                : $"CAPTURING {pin.DisplayKey}: operator condition = +24 V APPLIED.";
+            statusLabel.Text = $"STEP 1/2 — APPLY +24 V TO {pin.DisplayKey}. Waiting for OTMR response...";
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Unable to start capture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, "Unable to start input test", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
+
+    private void CancelInputTestButton_Click(object? sender, EventArgs e) =>
+        CancelInputTest("INPUT TEST CANCELLED. Partial evidence from this run was discarded.");
 
     private async void CaptureWindowTimer_Tick(object? sender, EventArgs e)
     {
         captureWindowTimer.Stop();
-        Guid? inputId = _captureCoordinator.ActiveInputId;
-        string? displayKey = _captureCoordinator.ActivePinKey;
+        Guid? inputId = _inputTestCoordinator.ActiveInputId;
+        string? displayKey = _inputTestCoordinator.ActivePinKey;
         try
         {
-            RcmStateEvidence evidence = _captureCoordinator.Stop(DateTimeOffset.Now);
+            int requiredRuns = _rcmProfile?.RequiredVerificationRuns ?? 3;
+            RcmInputTestState nextState = _inputTestCoordinator.CompleteCapture(DateTimeOffset.Now, requiredRuns);
             if (_rcmProfile is not null)
                 _rcmProfile.LastModifiedTimestamp = DateTimeOffset.Now;
             RenderTable(inputId);
+            UpdateInputTestStatusOnly();
             UpdateCommandAvailability();
-            statusLabel.Text =
-                evidence.Tested
-                    ? $"CAPTURED {displayKey}: {evidence.FrameCount} complete raw frame(s). CANDIDATE RAW EVIDENCE only; decoder NOT VERIFIED."
-                    : $"NO OTMR DATA for {displayKey}: zero complete frames. State remains NOT CAPTURED and progress was not incremented.";
-            await SaveProfileToKnownPathAsync(showConfirmation: false);
+            if (nextState == RcmInputTestState.WaitingForVoltageRemoved)
+            {
+                armTimeoutTimer.Start();
+                int appliedFrames = _inputTestCoordinator.ActivePin?.VoltageApplied24V.FrameCount ?? 0;
+                statusLabel.Text =
+                    $"STEP 2/2 — +24 V CAPTURED: {appliedFrames} complete frame(s). " +
+                    $"NOW REMOVE +24 V FROM {displayKey}. Waiting for OTMR response...";
+            }
+            else
+            {
+                RcmPinProfile pin = _inputTestCoordinator.ActivePin!;
+                statusLabel.Text = BuildTestCompleteText(pin);
+                await SaveProfileToKnownPathAsync(showConfirmation: false);
+            }
         }
         catch (Exception ex)
         {
             statusLabel.Text = ex.Message;
             UpdateCommandAvailability();
         }
+    }
+
+    private void ArmTimeoutTimer_Tick(object? sender, EventArgs e)
+    {
+        armTimeoutTimer.Stop();
+        CancelInputTest("OPERATOR WAIT TIMED OUT. No evidence from this incomplete test was retained; start again when ready.");
+    }
+
+    private void CancelInputTest(string message)
+    {
+        captureWindowTimer.Stop();
+        armTimeoutTimer.Stop();
+        Guid? inputId = _inputTestCoordinator.ActiveInputId;
+        if (!_inputTestCoordinator.Cancel())
+            return;
+
+        RenderTable(inputId);
+        UpdateCommandAvailability();
+        statusLabel.Text = message;
+    }
+
+    private async void VerifyMappingButton_Click(object? sender, EventArgs e)
+    {
+        RcmPinProfile? pin = SelectedProfilePin();
+        if (pin is null)
+            return;
+        try
+        {
+            RcmMappingVerificationService.VerifyMapping(pin, DateTimeOffset.Now);
+            MarkProfileModified();
+            RenderTable(pin.Id);
+            statusLabel.Text = $"MAPPING VERIFIED — {pin.DisplayKey} by repeated physical stimulation. Decoder metadata saved.";
+            await SaveProfileToKnownPathAsync(showConfirmation: false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Cannot verify mapping", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void ResetVerificationButton_Click(object? sender, EventArgs e)
+    {
+        RcmPinProfile? pin = SelectedProfilePin();
+        if (pin is null)
+            return;
+        RcmMappingVerificationService.ResetVerification(pin, DateTimeOffset.Now);
+        MarkProfileModified();
+        RenderTable(pin.Id);
+        statusLabel.Text = $"Verification reset for {pin.DisplayKey}. Historical audit entry retained; repeat guided tests to verify again.";
+        await SaveProfileToKnownPathAsync(showConfirmation: false);
     }
 
     private async void CompareStatesButton_Click(object? sender, EventArgs e)
@@ -669,7 +746,9 @@ public partial class OtmrBenchControl : UserControl
         {
             rcmGrid.ClearSelection();
             selectedRow.Selected = true;
-            rcmGrid.CurrentCell = selectedRow.Cells[0];
+            DataGridViewCell firstCell = selectedRow.Cells[0];
+            if (DataGridViewViewport.CanDisplayRows(rcmGrid) && selectedRow.Visible && firstCell.Visible)
+                rcmGrid.CurrentCell = firstCell;
         }
 
         UpdateProgress();
@@ -771,7 +850,17 @@ public partial class OtmrBenchControl : UserControl
         row.Cells[voltageRemovedColumn.Index].Value = FormatCaptureState(pin, RcmElectricalTestState.VoltageRemoved);
         row.Cells[voltageAppliedColumn.Index].Value = FormatCaptureState(pin, RcmElectricalTestState.VoltageApplied24V);
         row.Cells[stateDifferenceColumn.Index].Value = FormatDifference(pin);
-        row.Cells[decoderColumn.Index].Value = "NOT VERIFIED";
+        row.Cells[decoderColumn.Index].Value =
+            RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(pin)
+                ? "VERIFIED"
+                : pin.DecoderVerification.Status switch
+                {
+                    RcmVerificationStates.Conflict => "CONFLICT",
+                    RcmVerificationStates.Eligible => "ELIGIBLE",
+                    RcmVerificationStates.CandidateFound =>
+                        $"CANDIDATE {pin.DecoderVerification.SuccessfulRepetitionCount}/{pin.DecoderVerification.RequiredRunCount}",
+                    _ => "NOT VERIFIED"
+                };
         row.Cells[rcmResultColumn.Index].Value = pin.RcmResult;
         ApplyRowStyle(row, pin);
     }
@@ -857,16 +946,50 @@ public partial class OtmrBenchControl : UserControl
         return null;
     }
 
-    private void UpdateCaptureStatusOnly()
+    private void UpdateInputTestStatusOnly()
     {
-        RcmPinProfile? pin = SelectedProfilePin();
-        if (pin is null)
+        if (SelectedProfilePin() is not RcmPinProfile pin || _inputTestCoordinator.ActiveInputId != pin.Id)
             return;
 
-        if (_captureCoordinator.ActiveState == RcmElectricalTestState.VoltageRemoved)
-            voltageRemovedStatusLabel.Text = $"CAPTURING | {pin.VoltageRemoved.FrameCount} complete frame(s)";
-        else if (_captureCoordinator.ActiveState == RcmElectricalTestState.VoltageApplied24V)
-            voltageAppliedStatusLabel.Text = $"CAPTURING | {pin.VoltageApplied24V.FrameCount} complete frame(s)";
+        switch (_inputTestCoordinator.State)
+        {
+            case RcmInputTestState.WaitingFor24VApplied:
+                voltageAppliedInstructionLabel.Text = $"APPLY +24 V TO {pin.DisplayKey}";
+                voltageAppliedStatusLabel.Text = "Waiting for OTMR response...";
+                voltageRemovedInstructionLabel.Text = "STEP 2/2 will begin automatically after +24 V capture";
+                voltageRemovedStatusLabel.Text = "PENDING";
+                break;
+            case RcmInputTestState.Capturing24VApplied:
+                voltageAppliedInstructionLabel.Text = "+24 V DETECTED — Capturing...";
+                voltageAppliedStatusLabel.Text =
+                    $"CAPTURING: {pin.VoltageApplied24V.FrameCount} complete frame(s)";
+                voltageRemovedInstructionLabel.Text = "STEP 2/2 will begin automatically";
+                voltageRemovedStatusLabel.Text = "PENDING";
+                break;
+            case RcmInputTestState.WaitingForVoltageRemoved:
+                voltageAppliedInstructionLabel.Text = "+24 V CAPTURED";
+                voltageAppliedStatusLabel.Text =
+                    $"CAPTURED: {pin.VoltageApplied24V.FrameCount} complete frame(s)";
+                voltageRemovedInstructionLabel.Text = $"NOW REMOVE +24 V FROM {pin.DisplayKey}";
+                voltageRemovedStatusLabel.Text = "Waiting for OTMR response...";
+                break;
+            case RcmInputTestState.CapturingVoltageRemoved:
+                voltageAppliedInstructionLabel.Text = "+24 V CAPTURED";
+                voltageAppliedStatusLabel.Text =
+                    $"CAPTURED: {pin.VoltageApplied24V.FrameCount} complete frame(s)";
+                voltageRemovedInstructionLabel.Text = "VOLTAGE REMOVAL DETECTED — Capturing...";
+                voltageRemovedStatusLabel.Text =
+                    $"CAPTURING: {pin.VoltageRemoved.FrameCount} complete frame(s)";
+                break;
+            case RcmInputTestState.Complete:
+                voltageAppliedInstructionLabel.Text = "+24 V CAPTURED";
+                voltageAppliedStatusLabel.Text =
+                    $"CAPTURED: {pin.VoltageApplied24V.FrameCount} complete frame(s)";
+                voltageRemovedInstructionLabel.Text = "VOLTAGE REMOVED CAPTURED";
+                voltageRemovedStatusLabel.Text =
+                    $"CAPTURED: {pin.VoltageRemoved.FrameCount} complete frame(s)";
+                break;
+        }
     }
 
     private void UpdateWorkflow()
@@ -912,11 +1035,14 @@ public partial class OtmrBenchControl : UserControl
         }
         else
         {
-            voltageRemovedInstructionLabel.Text = $"REMOVE TEST VOLTAGE FROM {pinKey}";
-            voltageAppliedInstructionLabel.Text = $"APPLY +24 V TO {pinKey}";
+            if (_rcmProfile is not null)
+                RcmMappingVerificationService.Evaluate(pin, _rcmProfile.RequiredVerificationRuns, DateTimeOffset.Now);
+            voltageAppliedInstructionLabel.Text = $"START WITH TEST VOLTAGE REMOVED — then apply +24 V to {pinKey}";
+            voltageRemovedInstructionLabel.Text = "Captured automatically after the +24 V step";
             voltageRemovedStatusLabel.Text = FormatCaptureState(pin, RcmElectricalTestState.VoltageRemoved);
             voltageAppliedStatusLabel.Text = FormatCaptureState(pin, RcmElectricalTestState.VoltageApplied24V);
             evidenceTextBox.Text = BuildEvidenceSummary(pin);
+            UpdateInputTestStatusOnly();
         }
 
         UpdateCommandAvailability();
@@ -924,10 +1050,10 @@ public partial class OtmrBenchControl : UserControl
 
     private void UpdateCommandAvailability()
     {
-        bool capturing = _captureCoordinator.IsCapturing;
+        bool capturing = _inputTestCoordinator.IsRunning;
         RcmPinProfile? pin = SelectedProfilePin();
-        bool canCapture = _rcmProfile is not null && pin?.PhysicalMappingAssigned == true && pin.Testable &&
-                          _otmrLiveState == OtmrLiveState.LiveActive && !capturing;
+        bool canStart = _rcmProfile is not null && pin?.PhysicalMappingAssigned == true && pin.Testable &&
+                        CanAcceptBenchLiveFrames(_otmrLiveState) && !capturing;
         createRcmProfileButton.Enabled = _document is not null && !capturing;
         openRcmProfileButton.Enabled = !capturing;
         saveRcmProfileButton.Enabled = _rcmProfile is not null && !capturing;
@@ -937,9 +1063,21 @@ public partial class OtmrBenchControl : UserControl
         connectorComboBox.Enabled = !capturing;
         rcmGrid.Enabled = !capturing;
         captureSecondsNumeric.Enabled = !capturing;
-        captureVoltageRemovedButton.Enabled = canCapture;
-        captureVoltageAppliedButton.Enabled = canCapture;
-        compareStatesButton.Enabled = canCapture && pin!.VoltageRemoved.Tested && pin.VoltageApplied24V.Tested;
+        startInputTestButton.Visible = !capturing;
+        startInputTestButton.Enabled = canStart;
+        startInputTestButton.Text = pin?.VerificationRuns.Count > 0 ? "REPEAT INPUT TEST" : "START INPUT TEST";
+        cancelInputTestButton.Visible = capturing;
+        cancelInputTestButton.Enabled = capturing;
+        bool verificationEligible = pin?.DecoderVerification.Status == RcmVerificationStates.Eligible;
+        verifyMappingButton.Visible = !capturing && verificationEligible;
+        verifyMappingButton.Enabled = verificationEligible;
+        bool hasVerificationWork = pin is not null &&
+                                   (pin.VerificationRuns.Count > 0 ||
+                                    pin.DecoderVerification.Status is RcmVerificationStates.Verified or RcmVerificationStates.Conflict);
+        resetVerificationButton.Visible = !capturing && hasVerificationWork;
+        resetVerificationButton.Enabled = !capturing && hasVerificationWork;
+        compareStatesButton.Enabled = !capturing && pin is not null &&
+                                      HasGenuineFrames(pin.VoltageRemoved) && HasGenuineFrames(pin.VoltageApplied24V);
         resetInputButton.Enabled = _rcmProfile is not null && pin is not null && !capturing;
         addConnectorButton.Enabled = _rcmProfile is not null && !capturing;
         renameConnectorButton.Enabled = _rcmProfile is not null && SpecificConnectorFilter() is not null && !capturing;
@@ -956,6 +1094,16 @@ public partial class OtmrBenchControl : UserControl
 
     private void UpdateProgress()
     {
+        RcmPinProfile? selectedPin = SelectedProfilePin();
+        string decoderStatus = RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(selectedPin)
+            ? "VERIFIED"
+            : selectedPin?.DecoderVerification.Status switch
+            {
+                RcmVerificationStates.Conflict => "VERIFICATION CONFLICT",
+                RcmVerificationStates.Eligible => "ELIGIBLE — CONFIRMATION REQUIRED",
+                RcmVerificationStates.CandidateFound => "CANDIDATE — REPEAT TEST",
+                _ => "NOT VERIFIED"
+            };
         progressLabel.Text = _rcmProfile is null
             ? "RCM Progress: no profile created/opened"
             : $"Logical CCF inputs: {_rcmProfile.LogicalCcfInputCount:N0} | " +
@@ -965,7 +1113,7 @@ public partial class OtmrBenchControl : UserControl
               $"RCM complete: {_rcmProfile.CompletedTestablePinCount:N0} / {_rcmProfile.TestablePinCount:N0}";
         profilePathLabel.Text = _rcmProfile is null
             ? "RCM JSON: none"
-            : $"RCM JSON: {_rcmProfilePath ?? "not saved yet"} | Decoder: NOT VERIFIED";
+            : $"RCM JSON: {_rcmProfilePath ?? "not saved yet"} | Decoder: {decoderStatus}";
     }
 
     private RcmPinProfile? SelectedProfilePin() =>
@@ -983,8 +1131,55 @@ public partial class OtmrBenchControl : UserControl
             ? pin.VoltageRemoved
             : pin.VoltageApplied24V;
         if (evidence.Tested)
-            return $"CAPTURED | {evidence.FrameCount} frames";
+            return $"CAPTURED: {evidence.FrameCount} complete frame(s)";
         return evidence.NoOtmrData ? "NO OTMR DATA" : "NOT CAPTURED";
+    }
+
+    private static bool HasGenuineFrames(RcmStateEvidence evidence) =>
+        evidence.Tested && evidence.FrameCount > 0;
+
+    private static string DetectionText(RcmInputTestState state) =>
+        state == RcmInputTestState.Capturing24VApplied
+            ? "+24 V DETECTED"
+            : "VOLTAGE REMOVAL DETECTED";
+
+    private string BuildTestCompleteText(RcmPinProfile pin) =>
+        $"TEST COMPLETE — {pin.DisplayKey}\r\n" +
+        $"+24 V: CAPTURED, {pin.VoltageApplied24V.FrameCount} frame(s)\r\n" +
+        $"Voltage Removed: CAPTURED, {pin.VoltageRemoved.FrameCount} frame(s)\r\n" +
+        $"State Difference: {FormatDifference(pin)}\r\n" +
+        "Decoder: NOT VERIFIED\r\n" +
+        $"RCM Result: {pin.RcmResult}\r\n" +
+        BuildVerificationStatus(pin);
+
+    private static string BuildVerificationStatus(RcmPinProfile pin)
+    {
+        RcmDecoderVerification verification = pin.DecoderVerification;
+        string candidate = verification.ObservedMapping is null
+            ? "No unambiguous raw transition candidate"
+            : $"POSITION[{verification.ObservedMapping.RawPosition:D3}] " +
+              $"removed={verification.ObservedMapping.RemovedValue:X2}, +24V={verification.ObservedMapping.AppliedValue:X2}, " +
+              verification.ObservedMapping.TransitionPolarity;
+        if (RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(pin))
+        {
+            return $"Verification: VERIFIED by physical stimulation ({verification.SuccessfulRepetitionCount} run(s))\r\n" +
+                   $"Observed: {candidate}";
+        }
+
+        return verification.Status switch
+        {
+            RcmVerificationStates.Conflict =>
+                $"Verification: VERIFICATION CONFLICT — NEEDS REVIEW\r\nPreviously verified: {candidate}",
+            RcmVerificationStates.Eligible =>
+                $"Verification: RUN {verification.SuccessfulRepetitionCount} / {verification.RequiredRunCount} — " +
+                $"ELIGIBLE FOR VERIFICATION; OPERATOR CONFIRMATION REQUIRED\r\nObserved candidate: {candidate}",
+            RcmVerificationStates.CandidateFound =>
+                $"Verification: CANDIDATE REPEATABILITY {verification.SuccessfulRepetitionCount} / " +
+                $"{verification.RequiredRunCount} — REPEAT TEST TO VERIFY\r\nObserved candidate: {candidate}",
+            _ =>
+                $"Verification: RUN {pin.VerificationRuns.Count} / {verification.RequiredRunCount} — " +
+                "no unambiguous repeatable candidate yet"
+        };
     }
 
     private static string BuildSelectedInputSummary(RcmPinProfile pin, RcmCcfReference? ccf)
@@ -1050,13 +1245,24 @@ public partial class OtmrBenchControl : UserControl
         string differences = pin.Comparison.RepeatableDifferences.Count == 0
             ? "No comparison evidence yet."
             : string.Join("\r\n", pin.Comparison.RepeatableDifferences.Take(20));
+        string heading = HasGenuineFrames(pin.VoltageRemoved) && HasGenuineFrames(pin.VoltageApplied24V)
+            ? $"TEST COMPLETE — {pin.DisplayKey}\r\nCANDIDATE RAW EVIDENCE"
+            : "CANDIDATE RAW EVIDENCE";
+        string decoder = RcmMappingVerificationService.HasExplicitlyVerifiedDecoderMapping(pin)
+            ? "VERIFIED"
+            : pin.DecoderVerification.Status switch
+            {
+                RcmVerificationStates.Conflict => "VERIFICATION CONFLICT — NEEDS REVIEW",
+                _ => "NOT VERIFIED"
+            };
         return
-            $"CANDIDATE RAW EVIDENCE\r\n\r\n" +
+            heading + "\r\n\r\n" +
             CaptureSummary("Voltage Removed", pin.VoltageRemoved) + "\r\n\r\n" +
             CaptureSummary("+24V Applied", pin.VoltageApplied24V) + "\r\n\r\n" +
             $"State Difference:\r\n{differences}\r\n\r\n" +
-            "Decoder: NOT VERIFIED\r\n" +
-            $"RCM Result: {pin.RcmResult}\r\n\r\n" +
+            $"Decoder: {decoder}\r\n" +
+            $"RCM Result: {pin.RcmResult}\r\n" +
+            BuildVerificationStatus(pin) + "\r\n\r\n" +
             "Electrical condition is operator-supplied. It is not interpreted as CCF ON/OFF, a record number, card/channel, PASS, or FAIL.";
     }
 
@@ -1097,6 +1303,8 @@ public partial class OtmrBenchControl : UserControl
     {
         _closing = true;
         captureWindowTimer.Stop();
+        armTimeoutTimer.Stop();
+        _inputTestCoordinator.Cancel();
         base.OnHandleDestroyed(e);
     }
 }

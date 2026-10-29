@@ -1,5 +1,7 @@
+using CcfEditor.Core;
 using CcfEditor.Otmr.Capture;
 using CcfEditor.Otmr.Live;
+using CcfEditor.Otmr.Rcm;
 using CcfEditor.Otmr.Transport;
 
 namespace CcfEditor.WinForms;
@@ -13,8 +15,23 @@ public partial class OtmrLiveControl : UserControl
     private CancellationTokenSource? _startCancellation;
     private string? _connectedPortName;
     private int _assembledFrameCount;
+    private bool _captureScrollPending;
+    private bool _captureScrollInvokeQueued;
+    private CcfDocument? _selectedCcf;
+    private readonly Dictionary<OtmrCaptureEntry, OtmrLiveFrameAppendAnalysis> _rxAnalyses = new();
+    private readonly Dictionary<OtmrLiveFrame, DecodedFrameInterpretation> _decodedFrameInterpretations = new();
+    private readonly Dictionary<Guid, InterpretedVerifiedState> _lastInterpretedVerifiedStates = new();
+    private string? _interpretationProfileKey;
 
     internal OtmrLiveState State => _liveService.State;
+
+    /// <summary>
+    /// Raised once for each genuine complete live frame emitted by the shared
+    /// OtmrLiveService. MainForm owns the downstream bench/RCM/realtime routing;
+    /// the control must not rely on a nullable visual-tree lookup for that path.
+    /// </summary>
+    internal event EventHandler<OtmrLiveFrameEventArgs>? GenuineLiveFrameReceived;
+    internal event EventHandler<OtmrLiveSessionStartedEventArgs>? GenuineLiveSessionStarted;
 
     public OtmrLiveControl()
     {
@@ -27,13 +44,26 @@ public partial class OtmrLiveControl : UserControl
         _liveService.ConnectionChanged += LiveService_ConnectionChanged;
         _liveService.ErrorOccurred += LiveService_ErrorOccurred;
         _liveService.StateChanged += LiveService_StateChanged;
+        _liveService.LiveSessionStarted += LiveService_LiveSessionStarted;
+        _liveService.DiagnosticAdded += LiveService_DiagnosticAdded;
 
         RefreshPorts();
         UpdateStateUi();
         RefreshCaptureGrid();
+        captureGrid.Layout += CaptureGrid_LayoutAvailable;
+        captureGrid.SizeChanged += CaptureGrid_LayoutAvailable;
+        captureGrid.VisibleChanged += CaptureGrid_LayoutAvailable;
+    }
+
+    internal void SetCurrentCcf(CcfDocument? document)
+    {
+        _selectedCcf = document;
+        UpdateStateUi();
     }
 
     private void RefreshPortsButton_Click(object? sender, EventArgs e) => RefreshPorts();
+
+    private void PortComboBox_SelectedIndexChanged(object? sender, EventArgs e) => UpdateStateUi();
 
     private void RefreshPorts()
     {
@@ -94,14 +124,22 @@ public partial class OtmrLiveControl : UserControl
 
     private async void StartLiveButton_Click(object? sender, EventArgs e)
     {
+        if (_selectedCcf is null)
+        {
+            MessageBox.Show(this, "Open and explicitly select a Class 171 CCF before starting live output.",
+                "OTMR START preflight", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         const string confirmation =
             "Start the Class 171 OTMR real-time output sequence?\r\n\r\n" +
-            "This uses the observed Arrowvale live-start sequence.\r\n" +
-            "No CCF/configuration blocks will be transmitted.";
+            "CONTROLLED BENCH VALIDATION: this interrogates the recorder, validates the selected CCF, " +
+            "freezes its original pages, then sends the seven proven generated writes.\r\n\r\n" +
+            "Live status still requires a complete FB FB ... FF frame.";
         if (MessageBox.Show(
                 this,
                 confirmation,
-                "Start OTMR Live — evidence-backed candidate",
+                "Start OTMR Live — captured interrogation",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2) != DialogResult.Yes)
@@ -112,7 +150,7 @@ public partial class OtmrLiveControl : UserControl
         SetBusy(true);
         try
         {
-            await _liveService.StartLiveAsync(_startCancellation.Token);
+            await _liveService.StartLiveAsync(_selectedCcf, _startCancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -122,6 +160,47 @@ public partial class OtmrLiveControl : UserControl
         {
             statusLabel.Text = $"Live start failed: {ex.Message}";
             MessageBox.Show(this, ex.Message, "Unable to start OTMR live output", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void StopLiveButton_Click(object? sender, EventArgs e)
+    {
+        SetBusy(true);
+        try
+        {
+            await _liveService.StopLiveAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Unable to stop OTMR realtime", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void StopRestoreButton_Click(object? sender, EventArgs e)
+    {
+        const string confirmation =
+            "Stop realtime and perform the captured full restoration exchange using the frozen pre-START recorder values?\r\n\r\n" +
+            "This is separate from Stop Live, which only closes the live COM port.";
+        if (MessageBox.Show(this, confirmation, "Stop + Restore original OTMR configuration",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
+
+        SetBusy(true);
+        try
+        {
+            await _liveService.StopAndRestoreAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Unable to restore OTMR configuration", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -150,6 +229,9 @@ public partial class OtmrLiveControl : UserControl
     private void ClearCaptureButton_Click(object? sender, EventArgs e)
     {
         _liveService.ClearCapture();
+        _rxAnalyses.Clear();
+        _decodedFrameInterpretations.Clear();
+        ResetVerifiedInterpretationState();
         RefreshCaptureGrid();
         statusLabel.Text = "Capture cleared.";
     }
@@ -232,11 +314,12 @@ public partial class OtmrLiveControl : UserControl
 
         void AddRow()
         {
+            if (e.RxAnalysis is not null)
+                _rxAnalyses[e.Entry] = e.RxAnalysis;
             if (EntryMatchesCurrentFilter(e.Entry))
             {
                 AddCaptureRow(e.Entry);
-                if (captureGrid.Rows.Count > 0)
-                    captureGrid.FirstDisplayedScrollingRowIndex = captureGrid.Rows.Count - 1;
+                RequestCaptureScrollToLastRow();
             }
 
             UpdateCaptureCount(_liveService.GetCaptureSnapshot().Count);
@@ -271,6 +354,8 @@ public partial class OtmrLiveControl : UserControl
 
         void Update()
         {
+            if (e.State is OtmrLiveState.Disconnected or OtmrLiveState.WaitingForLiveFrames)
+                ResetVerifiedInterpretationState();
             UpdateStateUi();
             (FindForm() as MainForm)?.ReportOtmrLiveState(e.State);
         }
@@ -291,7 +376,7 @@ public partial class OtmrLiveControl : UserControl
             _assembledFrameCount++;
             statusLabel.Text =
                 $"Complete RX frame #{_assembledFrameCount}: {e.Frame.Length} bytes | {e.Frame.Hex}";
-            (FindForm() as MainForm)?.ReportOtmrLiveFrame(e.Timestamp, e.Frame);
+            GenuineLiveFrameReceived?.Invoke(this, e);
         }
 
         if (InvokeRequired)
@@ -300,12 +385,36 @@ public partial class OtmrLiveControl : UserControl
             ReportFrame();
     }
 
+    private void LiveService_LiveSessionStarted(object? sender, OtmrLiveSessionStartedEventArgs e)
+    {
+        if (_closing || IsDisposed)
+            return;
+
+        void ReportSession() => GenuineLiveSessionStarted?.Invoke(this, e);
+        if (InvokeRequired)
+            BeginInvoke((Action)ReportSession);
+        else
+            ReportSession();
+    }
+
     private void LiveService_ErrorOccurred(object? sender, OtmrLiveErrorEventArgs e)
     {
         if (_closing || IsDisposed)
             return;
 
         void Update() => statusLabel.Text = $"Serial error: {e.Exception.Message}";
+        if (InvokeRequired)
+            BeginInvoke((Action)Update);
+        else
+            Update();
+    }
+
+    private void LiveService_DiagnosticAdded(object? sender, OtmrProtocolDiagnosticEventArgs e)
+    {
+        if (_closing || IsDisposed)
+            return;
+
+        void Update() => statusLabel.Text = e.Entry.Message;
         if (InvokeRequired)
             BeginInvoke((Action)Update);
         else
@@ -336,19 +445,267 @@ public partial class OtmrLiveControl : UserControl
 
         UpdateCaptureCount(snapshot.Count);
 
-        if (captureGrid.Rows.Count > 0)
-            captureGrid.FirstDisplayedScrollingRowIndex = captureGrid.Rows.Count - 1;
+        RequestCaptureScrollToLastRow();
+    }
+
+    private void RequestCaptureScrollToLastRow()
+    {
+        if (_closing || captureGrid.IsDisposed || captureGrid.Rows.Count == 0)
+            return;
+
+        int target = captureGrid.Rows.Count - 1;
+        if (DataGridViewViewport.TryScrollToRow(captureGrid, target))
+        {
+            _captureScrollPending = false;
+            return;
+        }
+
+        _captureScrollPending = true;
+        if (_captureScrollInvokeQueued || !captureGrid.IsHandleCreated || captureGrid.Disposing)
+            return;
+
+        _captureScrollInvokeQueued = true;
+        BeginInvoke((Action)(() =>
+        {
+            _captureScrollInvokeQueued = false;
+            TryCompletePendingCaptureScroll();
+        }));
+    }
+
+    private void CaptureGrid_LayoutAvailable(object? sender, EventArgs e) => TryCompletePendingCaptureScroll();
+
+    private void TryCompletePendingCaptureScroll()
+    {
+        if (!_captureScrollPending || _closing || captureGrid.IsDisposed || captureGrid.Rows.Count == 0)
+            return;
+        if (DataGridViewViewport.TryScrollToRow(captureGrid, captureGrid.Rows.Count - 1))
+            _captureScrollPending = false;
     }
 
     private void AddCaptureRow(OtmrCaptureEntry entry)
     {
+        string interpretation = GetDisplayedInterpretation(entry);
+        string details = GetDetailedInterpretation(entry);
         int index = captureGrid.Rows.Add(
             entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"),
             entry.Direction.ToString().ToUpperInvariant(),
             entry.Hex,
-            entry.Interpretation ?? string.Empty);
-        captureGrid.Rows[index].Tag = entry;
+            interpretation);
+        DataGridViewRow row = captureGrid.Rows[index];
+        row.Tag = entry;
+        row.Cells[interpretationColumn.Index].ToolTipText = details;
     }
+
+    internal void ApplyVerifiedLiveInterpretation(
+        OtmrCaptureEntry completingCaptureEntry,
+        string? profileKey,
+        OtmrLiveFrame frame,
+        IReadOnlyList<RcmVerifiedLiveSignal> decodedSignals)
+    {
+        ArgumentNullException.ThrowIfNull(completingCaptureEntry);
+        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(decodedSignals);
+        if (_closing || IsDisposed)
+            return;
+
+        if (InvokeRequired)
+        {
+            RcmVerifiedLiveSignal[] snapshot = decodedSignals.ToArray();
+            BeginInvoke((Action)(() => ApplyVerifiedLiveInterpretation(
+                completingCaptureEntry, profileKey, frame, snapshot)));
+            return;
+        }
+
+        string normalizedProfileKey = profileKey?.Trim() ?? string.Empty;
+        if (!string.Equals(_interpretationProfileKey, normalizedProfileKey, StringComparison.Ordinal))
+        {
+            _interpretationProfileKey = normalizedProfileKey;
+            _lastInterpretedVerifiedStates.Clear();
+        }
+
+        var displayed = new List<DisplayedVerifiedState>();
+        foreach (RcmVerifiedLiveSignal signal in decodedSignals.Where(IsDisplayableVerifiedState))
+        {
+            var current = new InterpretedVerifiedState(
+                signal.State,
+                signal.RawObservedValue!.Value,
+                signal.ObservedBitValue);
+            bool unchanged = _lastInterpretedVerifiedStates.TryGetValue(
+                signal.PinId, out InterpretedVerifiedState? previous) && previous == current;
+            displayed.Add(new DisplayedVerifiedState(signal, unchanged));
+            _lastInterpretedVerifiedStates[signal.PinId] = current;
+        }
+
+        int payloadEndExclusive = Math.Max(2, frame.Length - 1);
+        HashSet<int> mappedPayloadPositions = decodedSignals
+            .Where(signal => string.Equals(
+                signal.VerificationStatus, RcmVerificationStates.Verified, StringComparison.Ordinal))
+            .SelectMany(signal => signal.MatchedFramePositions.Count > 0
+                ? signal.MatchedFramePositions
+                : new[] { signal.ObservedFramePosition ?? signal.RawPosition })
+            .Where(position => position >= 2 && position < payloadEndExclusive)
+            .ToHashSet();
+        _decodedFrameInterpretations[frame] = new DecodedFrameInterpretation(
+            displayed,
+            mappedPayloadPositions);
+
+        foreach (DataGridViewRow row in captureGrid.Rows)
+        {
+            if (!ReferenceEquals(row.Tag, completingCaptureEntry))
+                continue;
+            string interpretation = GetDisplayedInterpretation(completingCaptureEntry);
+            row.Cells[interpretationColumn.Index].Value = interpretation;
+            row.Cells[interpretationColumn.Index].ToolTipText = GetDetailedInterpretation(completingCaptureEntry);
+            break;
+        }
+    }
+
+    private string GetDisplayedInterpretation(OtmrCaptureEntry entry) =>
+        GetInterpretation(entry, detailed: false);
+
+    private string GetDetailedInterpretation(OtmrCaptureEntry entry) =>
+        GetInterpretation(entry, detailed: true);
+
+    private string GetInterpretation(OtmrCaptureEntry entry, bool detailed)
+    {
+        if (entry.Direction != OtmrDirection.Rx)
+            return entry.Interpretation ?? string.Empty;
+
+        if (!_rxAnalyses.TryGetValue(entry, out OtmrLiveFrameAppendAnalysis? analysis))
+        {
+            return string.IsNullOrWhiteSpace(entry.Interpretation)
+                ? $"UNKNOWN / UNFRAMED RX: {entry.Hex}"
+                : $"PROTOCOL/CONTROL RX — {entry.Interpretation}";
+        }
+
+        var primaryParts = new List<string>();
+        var structuralParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(entry.Interpretation))
+            structuralParts.Add($"PROTOCOL/CONTROL RX — {entry.Interpretation}");
+        if (analysis.MalformedCandidateCount > 0)
+        {
+            structuralParts.Add(analysis.MalformedCandidateCount == 1
+                ? "MALFORMED LIVE FRAME CANDIDATE — assembler resynchronised"
+                : $"MALFORMED LIVE FRAME CANDIDATES: {analysis.MalformedCandidateCount} — assembler resynchronised");
+        }
+
+        foreach (OtmrLiveFrameCompletion completion in analysis.CompletedFrames)
+        {
+            bool hasVerifiedDisplay = _decodedFrameInterpretations.TryGetValue(
+                completion.Frame, out DecodedFrameInterpretation? decoded) &&
+                decoded.DisplayedStates.Count > 0;
+            List<string> destination = !detailed && hasVerifiedDisplay
+                ? primaryParts
+                : structuralParts;
+            destination.Add(FormatCompletedFrame(completion.Frame, detailed));
+        }
+
+        bool protocolOnly = !string.IsNullOrWhiteSpace(entry.Interpretation) &&
+                            analysis.CompletedFrames.Count == 0 &&
+                            !analysis.HasPartialLiveFrame &&
+                            analysis.MalformedCandidateCount == 0;
+        if (!protocolOnly)
+        {
+            foreach (OtmrRxOutsideSegment outside in analysis.OutsideSegments)
+            {
+                bool followsTerminator = analysis.CompletedFrames.Any(
+                    completion => completion.TerminatorChunkOffset < outside.StartOffset);
+                structuralParts.Add(followsTerminator
+                    ? detailed
+                        ? $"TRAILING RX AFTER FF: {outside.Hex} — OUTSIDE LIVE FRAME; meaning UNKNOWN / UNMAPPED"
+                        : $"Trailing: {outside.Hex} (UNKNOWN)"
+                    : $"OUTSIDE LIVE FRAME: {outside.Hex} — UNKNOWN / UNMAPPED");
+            }
+        }
+
+        if (analysis.HasPartialLiveFrame)
+            structuralParts.Add("PARTIAL LIVE FRAME — waiting for FF");
+        if (primaryParts.Count == 0 && structuralParts.Count == 0)
+            structuralParts.Add(entry.Data.Length == 0
+                ? "UNKNOWN / UNFRAMED RX — empty chunk"
+                : $"UNKNOWN / UNFRAMED RX: {entry.Hex}");
+        return string.Join(" | ", primaryParts.Concat(structuralParts));
+    }
+
+    private string FormatCompletedFrame(OtmrLiveFrame frame, bool detailed)
+    {
+        byte[] bytes = frame.GetDataSnapshot();
+        byte[] payload = bytes.Length > 3 ? bytes[2..^1] : Array.Empty<byte>();
+        string payloadHex = payload.Length == 0
+            ? "(empty)"
+            : string.Join(" ", payload.Select(value => value.ToString("X2")));
+        var parts = new List<string>();
+        if (detailed)
+            parts.Add("COMPLETE LIVE FRAME");
+        parts.Add($"Payload: {payloadHex}");
+
+        if (!_decodedFrameInterpretations.TryGetValue(frame, out DecodedFrameInterpretation? decoded))
+            return detailed
+                ? string.Join(" | ", parts)
+                : $"COMPLETE LIVE FRAME | {string.Join(" | ", parts)}";
+
+        if (decoded.DisplayedStates.Count > 0)
+        {
+            string verified = "VERIFIED: " + string.Join(
+                "; ", decoded.DisplayedStates.Select(FormatVerifiedState));
+            if (detailed)
+                parts.Add(verified);
+            else
+                parts.Insert(0, verified);
+        }
+        else if (decoded.MappedPayloadPositions.Count > 0)
+        {
+            parts.Add("Explicitly VERIFIED mapping present, but state is UNKNOWN / not ACTIVE or INACTIVE");
+        }
+        else
+        {
+            parts.Add("No explicitly VERIFIED signal mapping");
+        }
+
+        int unmappedPayloadBytes = Math.Max(0, payload.Length - decoded.MappedPayloadPositions.Count);
+        if (unmappedPayloadBytes > 0)
+            parts.Add($"Unmapped payload bytes: {unmappedPayloadBytes}");
+
+        if (!detailed && decoded.DisplayedStates.Count == 0)
+            parts.Insert(0, "COMPLETE LIVE FRAME");
+        return string.Join(" | ", parts);
+    }
+
+    private void ResetVerifiedInterpretationState()
+    {
+        _interpretationProfileKey = null;
+        _lastInterpretedVerifiedStates.Clear();
+    }
+
+    private static bool IsDisplayableVerifiedState(RcmVerifiedLiveSignal signal) =>
+        signal.PinId != Guid.Empty &&
+        string.Equals(signal.VerificationStatus, RcmVerificationStates.Verified, StringComparison.Ordinal) &&
+        signal.State is RcmDecodedElectricalState.Active or RcmDecodedElectricalState.Inactive &&
+        signal.RawObservedValue is >= byte.MinValue and <= byte.MaxValue;
+
+    private static string FormatVerifiedState(DisplayedVerifiedState displayed)
+    {
+        RcmVerifiedLiveSignal signal = displayed.Signal;
+        string physical = string.IsNullOrWhiteSpace(signal.Connector)
+            ? signal.Pin
+            : string.IsNullOrWhiteSpace(signal.Pin)
+                ? signal.Connector
+                : $"{signal.Connector}-{signal.Pin}";
+        string state = signal.State == RcmDecodedElectricalState.Active ? "ACTIVE" : "INACTIVE";
+        string unchanged = displayed.Unchanged ? " (UNCHANGED)" : string.Empty;
+        return $"{physical} {signal.Function}={state} [{signal.RawObservedValue!.Value}]{unchanged}".Trim();
+    }
+
+    private sealed record DisplayedVerifiedState(RcmVerifiedLiveSignal Signal, bool Unchanged);
+
+    private sealed record DecodedFrameInterpretation(
+        IReadOnlyList<DisplayedVerifiedState> DisplayedStates,
+        IReadOnlySet<int> MappedPayloadPositions);
+
+    private sealed record InterpretedVerifiedState(
+        RcmDecodedElectricalState State,
+        int RawObservedValue,
+        int? ObservedBitValue);
 
     private bool EntryMatchesCurrentFilter(OtmrCaptureEntry entry)
     {
@@ -371,7 +728,9 @@ public partial class OtmrLiveControl : UserControl
         bool hasPort = portComboBox.SelectedItem is string;
         connectButton.Enabled = !_busy && disconnected && hasPort;
         startLiveButton.Enabled = !_busy && state == OtmrLiveState.ConnectedIdle;
-        disconnectButton.Enabled = state != OtmrLiveState.Disconnected;
+        stopLiveButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames;
+        stopRestoreButton.Enabled = !_busy && state is OtmrLiveState.LiveActive or OtmrLiveState.LiveReady or OtmrLiveState.WaitingForLiveFrames or OtmrLiveState.NotLive;
+        disconnectButton.Enabled = !_busy && state != OtmrLiveState.Disconnected;
         portComboBox.Enabled = !_busy && disconnected;
         refreshPortsButton.Enabled = !_busy && disconnected;
 
@@ -379,12 +738,20 @@ public partial class OtmrLiveControl : UserControl
         {
             OtmrLiveState.Disconnected => ("DISCONNECTED", Color.DimGray),
             OtmrLiveState.ConnectedIdle => ("CONNECTED — IDLE (NO LIVE STREAM)", Color.DarkOrange),
-            OtmrLiveState.QuerySent => ("QUERY SENT — WAITING FOR OTMR REPLY", Color.DarkOrange),
-            OtmrLiveState.OtmrReplied => ("OTMR REPLIED", Color.DarkGreen),
-            OtmrLiveState.StartingLive => ("STARTING LIVE — CANDIDATE COMMAND SENT", Color.DarkOrange),
-            OtmrLiveState.WaitingForLiveFrames => ("WAITING FOR FB FB … FF LIVE FRAMES", Color.DarkOrange),
-            OtmrLiveState.LiveActive => ("LIVE STREAM ACTIVE", Color.DarkGreen),
+            OtmrLiveState.PreflightingConfiguration => ("VALIDATING GENERATED CONFIGURATION EXCHANGE", Color.DarkOrange),
+            >= OtmrLiveState.WaitingFor01_01 and <= OtmrLiveState.WaitingFor01_0C =>
+                ($"INTERROGATING — {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)}", Color.DarkOrange),
+            OtmrLiveState.RecorderConfigurationWriteBlocked =>
+                ("STOPPED — RECORDER CONFIGURATION WRITE SAFETY BOUNDARY", Color.DarkRed),
+            >= OtmrLiveState.WaitingFor01_0D and <= OtmrLiveState.WaitingFor01_13 =>
+                ($"GENERATED CONFIGURATION EXCHANGE — {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)}", Color.DarkOrange),
+            OtmrLiveState.StartingLive => ("STARTING LIVE — CAPTURED FINAL COMMAND SENT", Color.DarkOrange),
+            OtmrLiveState.WaitingForLiveFrames => ("ARMING NATIVE LIVE RECEIVE", Color.DarkOrange),
+            OtmrLiveState.LiveReady => ("OTMR LIVE READY — waiting for input events", Color.DarkGreen),
+            OtmrLiveState.LiveActive => ("OTMR LIVE STREAM ACTIVE", Color.DarkGreen),
             OtmrLiveState.Error => ("ERROR — LIVE STREAM NOT ACTIVE", Color.DarkRed),
+            OtmrLiveState.NotLive => ("NOT LIVE - COM CLOSED", Color.DimGray),
+            OtmrLiveState.RestoringOriginalConfiguration => ("RESTORING FROZEN PRE-START CONFIGURATION", Color.DarkOrange),
             _ => (state.ToString(), SystemColors.ControlText)
         };
         liveStateLabel.Text = text;
@@ -395,12 +762,20 @@ public partial class OtmrLiveControl : UserControl
         {
             OtmrLiveState.Disconnected => "Disconnected. Connect opens 38400/8/N/1 with RTS LOW and DTR LOW; it sends nothing.",
             OtmrLiveState.ConnectedIdle => $"{port} open at 38400/8/N/1, RTS LOW, DTR LOW. Click Start OTMR Live to send the controlled sequence.",
-            OtmrLiveState.QuerySent => "Proven 01 01 query transmitted; waiting for the expected OTMR reply.",
-            OtmrLiveState.OtmrReplied => "OTMR REPLIED. Proceeding with the confirmed operator-requested candidate live-start operation.",
-            OtmrLiveState.StartingLive => "Candidate 01 07 live-start frame transmitted; performing the observed controlled close/reopen.",
-            OtmrLiveState.WaitingForLiveFrames => $"{port} reopened at 38400/8/N/1, RTS LOW, DTR HIGH; waiting for a complete FB FB … FF frame.",
-            OtmrLiveState.LiveActive => "LIVE STREAM ACTIVE — complete FB FB … FF traffic detected. Raw frames only; meanings are not inferred.",
-            OtmrLiveState.Error => "Live-start error. No CCF or configuration block was transmitted. Stop / Disconnect before retrying.",
+            OtmrLiveState.PreflightingConfiguration => "Validating selected CCF compatibility, frozen recorder pages, generated lengths/checks, and complete byte provenance.",
+            >= OtmrLiveState.WaitingFor01_01 and <= OtmrLiveState.WaitingFor01_0C =>
+                $"Captured read/interrogation stage {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)}; waiting for its complete reply/data frame.",
+            OtmrLiveState.RecorderConfigurationWriteBlocked =>
+                "Configuration preflight failed. No generated configuration write or final live-start command was transmitted; see the precise error message.",
+            >= OtmrLiveState.WaitingFor01_0D and <= OtmrLiveState.WaitingFor01_13 =>
+                $"Generated write accepted; waiting for the complete expected {state.ToString().Replace("WaitingFor", string.Empty, StringComparison.Ordinal)} reply before advancing.",
+            OtmrLiveState.StartingLive => "Captured final 01 07 sent after complete 01 13; closing after the observed ~17.6 ms interval.",
+            OtmrLiveState.WaitingForLiveFrames => $"{port} native live receive is being armed.",
+            OtmrLiveState.LiveReady => "OTMR Live Ready means the Class 171 START sequence completed and the native receive port is armed. Live Stream Active is shown after the first genuine realtime frame is received.",
+            OtmrLiveState.LiveActive => "OTMR LIVE STREAM ACTIVE — genuine complete FB FB … FF traffic detected. Raw frames only; meanings are not inferred.",
+            OtmrLiveState.Error => "Live-start error. Stop / Disconnect before retrying.",
+            OtmrLiveState.NotLive => "Realtime stopped by closing COM. No stop command was sent. Use Stop + Restore for the separate captured restoration exchange.",
+            OtmrLiveState.RestoringOriginalConfiguration => "Running the captured cleanup/restoration sequence from the frozen pre-START recorder snapshot.",
             _ => state.ToString()
         };
     }
@@ -419,6 +794,8 @@ public partial class OtmrLiveControl : UserControl
         _liveService.ConnectionChanged -= LiveService_ConnectionChanged;
         _liveService.ErrorOccurred -= LiveService_ErrorOccurred;
         _liveService.StateChanged -= LiveService_StateChanged;
+        _liveService.LiveSessionStarted -= LiveService_LiveSessionStarted;
+        _liveService.DiagnosticAdded -= LiveService_DiagnosticAdded;
         _startCancellation?.Cancel();
         _startCancellation?.Dispose();
         _liveService.Dispose();

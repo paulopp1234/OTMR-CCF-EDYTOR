@@ -351,17 +351,19 @@ public sealed class RcmProfileTests
     }
 
     [Fact]
-    public void ZeroFrameCaptureIsNoDataAndCannotBeComparedOrCountAsProgress()
+    public void ArmedTimeoutCreatesNoEvidenceAndCannotBeComparedOrCountAsProgress()
     {
         RcmProfile profile = CreateEditableProfile();
         RcmPinProfile input = profile.Pins.Single();
         var coordinator = new RcmCaptureWindowCoordinator();
 
-        coordinator.Begin(input, RcmElectricalTestState.VoltageRemoved, FixedTime);
-        RcmStateEvidence evidence = coordinator.Stop(FixedTime.AddSeconds(2));
+        coordinator.BeginArmed(input, RcmElectricalTestState.VoltageRemoved, FixedTime);
+        Assert.True(coordinator.IsArmed);
+        Assert.True(coordinator.CancelArmed());
+        RcmStateEvidence evidence = input.VoltageRemoved;
 
         Assert.False(evidence.Tested);
-        Assert.True(evidence.NoOtmrData);
+        Assert.False(evidence.NoOtmrData);
         Assert.Equal(0, evidence.FrameCount);
         Assert.Empty(evidence.CandidateRawSignature);
         Assert.Equal(0, profile.CompletedTestablePinCount);

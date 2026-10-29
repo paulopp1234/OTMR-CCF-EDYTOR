@@ -47,6 +47,14 @@ public static class RcmProfileJson
         return profile;
     }
 
+    public static string SerializeSnapshot(RcmProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        MigrateAndNormalize(profile);
+        Validate(profile);
+        return JsonSerializer.Serialize(profile, Options);
+    }
+
     public static void EnsureMatchesSource(RcmProfile profile, string sha256, long size)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -71,8 +79,11 @@ public static class RcmProfileJson
     public static void MigrateAndNormalize(RcmProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        if (profile.SchemaVersion is not ("1.0" or "1.1" or RcmProfile.CurrentSchemaVersion))
+        if (profile.SchemaVersion is not ("1.0" or "1.1" or "1.2" or RcmProfile.CurrentSchemaVersion))
             throw new InvalidDataException($"Unsupported RCM schema version '{profile.SchemaVersion}'.");
+
+        if (profile.RequiredVerificationRuns < 2)
+            profile.RequiredVerificationRuns = 3;
 
         profile.Connectors ??= new List<RcmConnector>();
         foreach (RcmConnector connector in profile.Connectors)
@@ -85,8 +96,35 @@ public static class RcmProfileJson
             pin.VoltageRemoved ??= new RcmStateEvidence();
             pin.VoltageApplied24V ??= new RcmStateEvidence();
             pin.Comparison ??= new RcmStateComparison();
+            pin.VerificationRuns ??= new List<RcmPhysicalVerificationRun>();
+            pin.DecoderVerification ??= new RcmDecoderVerification();
             NormalizeEvidence(pin.VoltageRemoved);
             NormalizeEvidence(pin.VoltageApplied24V);
+            NormalizeComparison(pin.Comparison);
+            foreach (RcmPhysicalVerificationRun run in pin.VerificationRuns)
+            {
+                if (run.RunId == Guid.Empty)
+                    run.RunId = Guid.NewGuid();
+                run.ExpectedCcf ??= new RcmExpectedMappingSnapshot();
+                run.VoltageApplied24V ??= new RcmStateEvidence();
+                run.VoltageRemoved ??= new RcmStateEvidence();
+                run.Comparison ??= new RcmStateComparison();
+                run.CandidateTransitions ??= new List<RcmObservedTransition>();
+                NormalizeEvidence(run.VoltageApplied24V);
+                NormalizeEvidence(run.VoltageRemoved);
+                NormalizeComparison(run.Comparison);
+            }
+            RcmDecoderVerification verification = pin.DecoderVerification;
+            verification.ExpectedCcf ??= new RcmExpectedMappingSnapshot();
+            verification.QualifyingRunIds ??= new List<Guid>();
+            verification.ContradictoryRunIds ??= new List<Guid>();
+            verification.AuditHistory ??= new List<RcmVerificationAuditEvent>();
+            foreach (RcmVerificationAuditEvent audit in verification.AuditHistory)
+                audit.RunIds ??= new List<Guid>();
+            if (verification.RequiredRunCount < 2)
+                verification.RequiredRunCount = profile.RequiredVerificationRuns;
+            if (!RcmVerificationStates.Allowed.Contains(verification.Status))
+                verification.Status = RcmVerificationStates.NotVerified;
 
             if ((!pin.VoltageRemoved.Tested || !pin.VoltageApplied24V.Tested) && pin.Comparison.ComparedAt is not null)
                 pin.Comparison = new RcmStateComparison();
@@ -94,6 +132,11 @@ public static class RcmProfileJson
                 pin.RcmResult = RcmResultStates.Unassigned;
             else if (pin.Comparison.ComparedAt is null)
                 pin.RcmResult = RcmCaptureWindowCoordinator.ResultForCapturedStates(pin);
+
+            RcmMappingVerificationService.Evaluate(
+                pin,
+                profile.RequiredVerificationRuns,
+                profile.LastModifiedTimestamp == default ? DateTimeOffset.UtcNow : profile.LastModifiedTimestamp);
         }
 
         foreach (string connector in profile.Pins.Select(pin => pin.Connector)
@@ -122,6 +165,15 @@ public static class RcmProfileJson
         }
     }
 
+    private static void NormalizeComparison(RcmStateComparison comparison)
+    {
+        comparison.CommonFeatures ??= new List<string>();
+        comparison.UniqueFeaturesVoltageRemoved ??= new List<string>();
+        comparison.UniqueFeaturesVoltageApplied24V ??= new List<string>();
+        comparison.RepeatableDifferences ??= new List<string>();
+        comparison.CandidateTransitionEvidence ??= new List<string>();
+    }
+
     private static void Validate(RcmProfile profile)
     {
         if (!string.Equals(profile.SchemaVersion, RcmProfile.CurrentSchemaVersion, StringComparison.Ordinal))
@@ -134,13 +186,38 @@ public static class RcmProfileJson
         if (profile.Connectors.Any(connector => connector.OrderedPins.Any(string.IsNullOrWhiteSpace) ||
                                                connector.OrderedPins.Distinct(StringComparer.Ordinal).Count() != connector.OrderedPins.Count))
             throw new InvalidDataException("Connector ordered pin lists cannot contain blank or duplicate pins.");
+        if (profile.RequiredVerificationRuns < 2)
+            throw new InvalidDataException("RCM physical verification must require at least two complete runs.");
 
         foreach (RcmPinProfile pin in profile.Pins)
         {
             if (!RcmResultStates.Allowed.Contains(pin.RcmResult))
                 throw new InvalidDataException($"Unsupported RCM result '{pin.RcmResult}' for {pin.DisplayKey}.");
-            if (pin.Comparison.DecoderVerified)
-                throw new InvalidDataException("This RCM schema version cannot mark a semantic decoder as verified.");
+            if (!RcmVerificationStates.Allowed.Contains(pin.DecoderVerification.Status))
+                throw new InvalidDataException($"Unsupported decoder verification status for {pin.DisplayKey}.");
+            if (pin.VerificationRuns.GroupBy(run => run.RunId).Any(group => group.Key == Guid.Empty || group.Count() > 1))
+                throw new InvalidDataException($"Verification runs for {pin.DisplayKey} contain missing or duplicate IDs.");
+            if (pin.Comparison.DecoderVerified &&
+                (pin.DecoderVerification.Status != RcmVerificationStates.Verified ||
+                 pin.DecoderVerification.VerifiedAt is null ||
+                 pin.DecoderVerification.ObservedMapping is null))
+                throw new InvalidDataException($"Verified decoder metadata is incomplete for {pin.DisplayKey}.");
+            if (pin.VerificationRuns.SelectMany(run => run.CandidateTransitions).Any(transition =>
+                    transition.RawPosition < 0 || transition.RemovedValue is < 0 or > 255 ||
+                    transition.AppliedValue is < 0 or > 255 || transition.Bit is < 0 or > 7))
+                throw new InvalidDataException($"Verification transitions contain invalid raw values for {pin.DisplayKey}.");
+            if (pin.DecoderVerification.Status == RcmVerificationStates.Verified)
+            {
+                RcmDecoderVerification verification = pin.DecoderVerification;
+                bool runIdsExist = verification.QualifyingRunIds.All(id =>
+                    pin.VerificationRuns.Any(run => run.RunId == id));
+                if (!string.Equals(verification.VerificationMethod, "physical stimulation", StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(verification.Connector) || string.IsNullOrWhiteSpace(verification.Pin) ||
+                    !verification.ExpectedCcf.IsComplete ||
+                    verification.SuccessfulRepetitionCount < verification.RequiredRunCount ||
+                    verification.QualifyingRunIds.Count < verification.RequiredRunCount || !runIdsExist)
+                    throw new InvalidDataException($"Verified physical-stimulation metadata is incomplete for {pin.DisplayKey}.");
+            }
         }
     }
 }

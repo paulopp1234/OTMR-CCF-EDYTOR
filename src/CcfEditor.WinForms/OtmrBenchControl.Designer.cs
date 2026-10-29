@@ -45,15 +45,18 @@ partial class OtmrBenchControl
     private DataGridViewTextBoxColumn rcmResultColumn = null!;
     private TableLayoutPanel workflowLayout = null!;
     private Label selectedPinLabel = null!;
+    private FlowLayoutPanel inputTestActionPanel = null!;
+    private Button startInputTestButton = null!;
+    private Button cancelInputTestButton = null!;
+    private Button verifyMappingButton = null!;
+    private Button resetVerificationButton = null!;
     private GroupBox voltageRemovedGroup = null!;
     private FlowLayoutPanel voltageRemovedPanel = null!;
     private Label voltageRemovedInstructionLabel = null!;
-    private Button captureVoltageRemovedButton = null!;
     private Label voltageRemovedStatusLabel = null!;
     private GroupBox voltageAppliedGroup = null!;
     private FlowLayoutPanel voltageAppliedPanel = null!;
     private Label voltageAppliedInstructionLabel = null!;
-    private Button captureVoltageAppliedButton = null!;
     private Label voltageAppliedStatusLabel = null!;
     private FlowLayoutPanel actionPanel = null!;
     private Button editSelectedWorkflowButton = null!;
@@ -63,6 +66,7 @@ partial class OtmrBenchControl
     private TextBox evidenceTextBox = null!;
     private Label statusLabel = null!;
     private System.Windows.Forms.Timer captureWindowTimer = null!;
+    private System.Windows.Forms.Timer armTimeoutTimer = null!;
 
     protected override void Dispose(bool disposing)
     {
@@ -114,15 +118,18 @@ partial class OtmrBenchControl
         rcmResultColumn = new DataGridViewTextBoxColumn();
         workflowLayout = new TableLayoutPanel();
         selectedPinLabel = new Label();
+        inputTestActionPanel = new FlowLayoutPanel();
+        startInputTestButton = new Button();
+        cancelInputTestButton = new Button();
+        verifyMappingButton = new Button();
+        resetVerificationButton = new Button();
         voltageRemovedGroup = new GroupBox();
         voltageRemovedPanel = new FlowLayoutPanel();
         voltageRemovedInstructionLabel = new Label();
-        captureVoltageRemovedButton = new Button();
         voltageRemovedStatusLabel = new Label();
         voltageAppliedGroup = new GroupBox();
         voltageAppliedPanel = new FlowLayoutPanel();
         voltageAppliedInstructionLabel = new Label();
-        captureVoltageAppliedButton = new Button();
         voltageAppliedStatusLabel = new Label();
         actionPanel = new FlowLayoutPanel();
         editSelectedWorkflowButton = new Button();
@@ -132,6 +139,7 @@ partial class OtmrBenchControl
         evidenceTextBox = new TextBox();
         statusLabel = new Label();
         captureWindowTimer = new System.Windows.Forms.Timer(components);
+        armTimeoutTimer = new System.Windows.Forms.Timer(components);
         rootLayout.SuspendLayout();
         commandPanel.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)captureSecondsNumeric).BeginInit();
@@ -142,6 +150,7 @@ partial class OtmrBenchControl
         mainSplit.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)rcmGrid).BeginInit();
         workflowLayout.SuspendLayout();
+        inputTestActionPanel.SuspendLayout();
         voltageRemovedGroup.SuspendLayout();
         voltageRemovedPanel.SuspendLayout();
         voltageAppliedGroup.SuspendLayout();
@@ -366,16 +375,18 @@ partial class OtmrBenchControl
         workflowLayout.ColumnStyles.Clear();
         workflowLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         workflowLayout.Controls.Add(selectedPinLabel, 0, 0);
-        workflowLayout.Controls.Add(voltageRemovedGroup, 0, 1);
+        workflowLayout.Controls.Add(inputTestActionPanel, 0, 1);
         workflowLayout.Controls.Add(voltageAppliedGroup, 0, 2);
-        workflowLayout.Controls.Add(actionPanel, 0, 3);
-        workflowLayout.Controls.Add(evidenceGroup, 0, 4);
+        workflowLayout.Controls.Add(voltageRemovedGroup, 0, 3);
+        workflowLayout.Controls.Add(actionPanel, 0, 4);
+        workflowLayout.Controls.Add(evidenceGroup, 0, 5);
         workflowLayout.AutoScroll = true;
         workflowLayout.Dock = DockStyle.Fill;
         workflowLayout.Name = "workflowLayout";
         workflowLayout.Padding = new Padding(8, 0, 0, 0);
-        workflowLayout.RowCount = 5;
+        workflowLayout.RowCount = 6;
         workflowLayout.RowStyles.Clear();
+        workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         workflowLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -388,6 +399,40 @@ partial class OtmrBenchControl
         selectedPinLabel.Padding = new Padding(6);
         selectedPinLabel.Text = "Select a physical pin";
         //
+        // guided input test actions
+        //
+        inputTestActionPanel.Controls.Add(startInputTestButton);
+        inputTestActionPanel.Controls.Add(cancelInputTestButton);
+        inputTestActionPanel.Controls.Add(verifyMappingButton);
+        inputTestActionPanel.Controls.Add(resetVerificationButton);
+        inputTestActionPanel.AutoSize = true;
+        inputTestActionPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        inputTestActionPanel.Dock = DockStyle.Fill;
+        inputTestActionPanel.Name = "inputTestActionPanel";
+        inputTestActionPanel.Padding = new Padding(6);
+        startInputTestButton.AutoSize = true;
+        startInputTestButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        startInputTestButton.Name = "startInputTestButton";
+        startInputTestButton.Text = "START INPUT TEST";
+        startInputTestButton.Click += StartInputTestButton_Click;
+        cancelInputTestButton.AutoSize = true;
+        cancelInputTestButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        cancelInputTestButton.Name = "cancelInputTestButton";
+        cancelInputTestButton.Text = "Cancel Test";
+        cancelInputTestButton.Visible = false;
+        cancelInputTestButton.Click += CancelInputTestButton_Click;
+        verifyMappingButton.AutoSize = true;
+        verifyMappingButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        verifyMappingButton.Name = "verifyMappingButton";
+        verifyMappingButton.Text = "VERIFY MAPPING";
+        verifyMappingButton.Visible = false;
+        verifyMappingButton.Click += VerifyMappingButton_Click;
+        resetVerificationButton.AutoSize = true;
+        resetVerificationButton.Name = "resetVerificationButton";
+        resetVerificationButton.Text = "REJECT / RESET VERIFICATION";
+        resetVerificationButton.Visible = false;
+        resetVerificationButton.Click += ResetVerificationButton_Click;
+        //
         // voltage removed workflow
         //
         voltageRemovedGroup.Controls.Add(voltageRemovedPanel);
@@ -397,9 +442,8 @@ partial class OtmrBenchControl
         voltageRemovedGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         voltageRemovedGroup.Name = "voltageRemovedGroup";
         voltageRemovedGroup.MinimumSize = new Size(0, 108);
-        voltageRemovedGroup.Text = "STEP 1 — TEST VOLTAGE REMOVED";
+        voltageRemovedGroup.Text = "STEP 2/2 — VOLTAGE REMOVED";
         voltageRemovedPanel.Controls.Add(voltageRemovedInstructionLabel);
-        voltageRemovedPanel.Controls.Add(captureVoltageRemovedButton);
         voltageRemovedPanel.Controls.Add(voltageRemovedStatusLabel);
         voltageRemovedPanel.Dock = DockStyle.Fill;
         voltageRemovedPanel.AutoSize = true;
@@ -412,11 +456,6 @@ partial class OtmrBenchControl
         voltageRemovedInstructionLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         voltageRemovedInstructionLabel.Name = "voltageRemovedInstructionLabel";
         voltageRemovedInstructionLabel.Text = "REMOVE TEST VOLTAGE FROM SELECTED PIN";
-        captureVoltageRemovedButton.AutoSize = true;
-        captureVoltageRemovedButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        captureVoltageRemovedButton.Name = "captureVoltageRemovedButton";
-        captureVoltageRemovedButton.Text = "Capture Voltage Removed";
-        captureVoltageRemovedButton.Click += CaptureVoltageRemovedButton_Click;
         voltageRemovedStatusLabel.AutoSize = true;
         voltageRemovedStatusLabel.Name = "voltageRemovedStatusLabel";
         voltageRemovedStatusLabel.Text = "NOT CAPTURED";
@@ -430,9 +469,8 @@ partial class OtmrBenchControl
         voltageAppliedGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         voltageAppliedGroup.Name = "voltageAppliedGroup";
         voltageAppliedGroup.MinimumSize = new Size(0, 108);
-        voltageAppliedGroup.Text = "STEP 2 — +24 V APPLIED";
+        voltageAppliedGroup.Text = "STEP 1/2 — +24 V APPLIED";
         voltageAppliedPanel.Controls.Add(voltageAppliedInstructionLabel);
-        voltageAppliedPanel.Controls.Add(captureVoltageAppliedButton);
         voltageAppliedPanel.Controls.Add(voltageAppliedStatusLabel);
         voltageAppliedPanel.Dock = DockStyle.Fill;
         voltageAppliedPanel.AutoSize = true;
@@ -445,11 +483,6 @@ partial class OtmrBenchControl
         voltageAppliedInstructionLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         voltageAppliedInstructionLabel.Name = "voltageAppliedInstructionLabel";
         voltageAppliedInstructionLabel.Text = "APPLY +24 V TO SELECTED PIN";
-        captureVoltageAppliedButton.AutoSize = true;
-        captureVoltageAppliedButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        captureVoltageAppliedButton.Name = "captureVoltageAppliedButton";
-        captureVoltageAppliedButton.Text = "Capture +24V Applied";
-        captureVoltageAppliedButton.Click += CaptureVoltageAppliedButton_Click;
         voltageAppliedStatusLabel.AutoSize = true;
         voltageAppliedStatusLabel.Name = "voltageAppliedStatusLabel";
         voltageAppliedStatusLabel.Text = "NOT CAPTURED";
@@ -500,6 +533,8 @@ partial class OtmrBenchControl
         statusLabel.Text = "RCM evidence capture only. No protocol semantics, PASS, or FAIL are inferred.";
         statusLabel.TextAlign = ContentAlignment.MiddleLeft;
         captureWindowTimer.Tick += CaptureWindowTimer_Tick;
+        armTimeoutTimer.Interval = 10000;
+        armTimeoutTimer.Tick += ArmTimeoutTimer_Tick;
         //
         // OtmrBenchControl
         //
@@ -520,6 +555,8 @@ partial class OtmrBenchControl
         mainSplit.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)rcmGrid).EndInit();
         workflowLayout.ResumeLayout(false);
+        inputTestActionPanel.ResumeLayout(false);
+        inputTestActionPanel.PerformLayout();
         voltageRemovedGroup.ResumeLayout(false);
         voltageRemovedPanel.ResumeLayout(false);
         voltageRemovedPanel.PerformLayout();
