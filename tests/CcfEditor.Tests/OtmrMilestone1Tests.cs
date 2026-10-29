@@ -643,6 +643,53 @@ public sealed class OtmrMilestone1Tests
     }
 
     [Fact]
+    public async Task FinalReplyWithCapturedStatus15_ReportsFullMismatchAndStopsBeforeLiveCommand()
+    {
+        IReadOnlyDictionary<byte, byte[]> replies = LoadCapturedReplies();
+        using var transport = new FakeTransport();
+        using var service = new OtmrLiveService(transport, FastStartTiming());
+        await service.ConnectAsync(OtmrSerialSettings.Class171Bench("COM7"));
+
+        Task start = service.StartLiveAsync(LoadSelectedCcf());
+        await DriveSafeInterrogationAsync(transport, service, replies);
+        await WaitForAsync(() => service.State == OtmrLiveState.WaitingFor01_0D);
+        foreach (byte transaction in new byte[] { 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12 })
+        {
+            transport.EmitRx(replies[transaction]);
+            OtmrLiveState next = transaction switch
+            {
+                0x0D => OtmrLiveState.WaitingFor01_0E,
+                0x0E => OtmrLiveState.WaitingFor01_0F,
+                0x0F => OtmrLiveState.WaitingFor01_10,
+                0x10 => OtmrLiveState.WaitingFor01_11,
+                0x11 => OtmrLiveState.WaitingFor01_12,
+                _ => OtmrLiveState.WaitingFor01_13
+            };
+            await WaitForAsync(() => service.State == next);
+        }
+
+        // Exact complete RX frame from OTMR_CAPTURE_20261029_133504.jsonl,
+        // 13:22:36.9208546. The opcode matches, but payload/check are 15, not 06.
+        byte[] rejectedReply = Convert.FromHexString("01130001010101010215031504");
+        int txBeforeRejectedReply = transport.Transmissions.Count;
+        EmitFragmented(transport, rejectedReply, 1, 8);
+        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() => start);
+
+        Assert.Contains("Expected OTMR stage 01 13", error.Message);
+        Assert.Contains("Expected frame (13 bytes): 01 13 00 01 01 01 01 01 02 06 03 06 04", error.Message);
+        Assert.Contains("Received frame (13 bytes): 01 13 00 01 01 01 01 01 02 15 03 15 04", error.Message);
+        Assert.Contains("First difference at offset 0x0009: expected 06, received 15", error.Message);
+        Assert.Contains("without sending any later command", error.Message);
+        Assert.Equal(18, txBeforeRejectedReply);
+        Assert.Equal(txBeforeRejectedReply, transport.Transmissions.Count);
+        Assert.DoesNotContain(transport.Transmissions,
+            bytes => bytes.AsSpan().SequenceEqual(OtmrLiveStartProtocol.FinalLiveStart07.Span));
+        Assert.Single(transport.ConnectionSettings);
+        Assert.DoesNotContain("DISCONNECT", transport.Operations);
+        Assert.Equal(OtmrLiveState.Error, service.State);
+    }
+
+    [Fact]
     public async Task GeneratedConfigurationReplyTimeoutDoesNotAdvanceOrAutoRestore()
     {
         IReadOnlyDictionary<byte, byte[]> replies = LoadCapturedReplies();
